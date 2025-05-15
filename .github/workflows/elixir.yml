@@ -1,0 +1,57 @@
+name: Elixir CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+
+    name: OTP ${{matrix.otp}} / Elixir ${{matrix.elixir}}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        otp: ['27.3.4']
+        elixir: ['1.18.3']
+
+    env:
+      MIX_ENV: test
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Elixir
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{matrix.otp}}
+        elixir-version: ${{matrix.elixir}}
+    - name: Restore dependencies cache
+      uses: actions/cache@v4
+      with:
+        path: deps
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: ${{ runner.os }}-mix-
+    - name: Restore PLTs
+      uses: actions/cache@v4
+      with:
+        path: _build/${{ env.MIX_ENV }}/dialyxir_*.plt
+        key: plt-${{ env.MIX_ENV }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ runner.os }}-${{ hashFiles('**/mix.lock') }}
+        restore-keys: |
+          plt-${{ env.MIX_ENV }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ runner.os }}-
+    - name: Check code formatting
+      run: mix format --check-formatted
+    - name: Install dependencies
+      run: mix deps.get
+    - name: Check for CVEs
+      run: mix deps.audit
+    - name: Compile
+      run: mix compile --force --warnings-as-errors
+    - name: Check for retired packages
+      run: mix hex.audit
+    - name: Run dialyzer
+      run: mix dialyzer
+    - name: Run tests
+      run: mix test
