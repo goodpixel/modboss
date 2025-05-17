@@ -1,10 +1,18 @@
 # ModBoss
 
-## Show that Bus who's Boss
+<img alt="ModBoss logo" width="500px" src="assets/boss.jpeg">
 
-ModBoss provides modbus schema mapping in Elixir.
+**Show that Bus who's Boss!**
 
-Instead of reading/writing modbus registers by number, use human-friendly names to document and access them.
+ModBoss provides modbus schema mapping and translation in Elixir.
+
+Instead of reading/writing modbus registers by number and scattering the translation logic around
+your code base, Modboss lets you to refer to registers by human-friendly names and allows you
+to consolidate your encoding/decoding logic separately from your device drivers, if desired.
+
+Note that ModBoss doesn't handle the actual reading/writing of modbus registers—it simply assists
+in providing friendlier access to register values. You'll likely be wrapping another library such
+as [Modbux](https://hexdocs.pm/modbux/readme.html) for the actual reads/writes.
 
 ## Installation
 
@@ -18,7 +26,3 @@ def deps do
   ]
 end
 ```
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/modboss>.
