@@ -7,7 +7,7 @@
     input_register: 3,
     coil: 2,
     coil: 3,
-    input: 2,
-    input: 3
+    discrete_input: 2,
+    discrete_input: 3
   ]
 ]
