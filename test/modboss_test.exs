@@ -295,6 +295,42 @@ defmodule ModBossTest do
                      ModBoss.read(FakeSchema, read_func(device), [:foo, :qux])
                    end
     end
+
+    test "decodes values per the `:as` option" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+        alias ModBoss.Encoding
+
+        modbus_schema do
+          # Assumes the function lives in the current module…
+          holding_register 1, :yep, as: :boolean
+          holding_register 2, :nope, as: :boolean
+
+          # Can explicitly specify the module
+          holding_register 3..5, :text, as: {Encoding, :ascii}
+        end
+
+        def decode_boolean(0), do: {:ok, false}
+        def decode_boolean(1), do: {:ok, true}
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_registers(device, %{
+        1 => 1,
+        2 => 0,
+        3 => 20328,
+        4 => 8311,
+        5 => 28535
+      })
+
+      assert {:ok, %{yep: true, nope: false, text: "Oh wow"}} =
+               ModBoss.read(schema, read_func(device), [:yep, :nope, :text])
+    end
   end
 
   describe "ModBoss.read_all/2" do
@@ -355,7 +391,7 @@ defmodule ModBossTest do
                ModBoss.write(FakeSchema, write_func(device), %{foobar: 1, bazqux: 2})
     end
 
-    test "refuses to write unless all registers are declared writeable" do
+    test "refuses to write unless all registers are declared writable" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       initial_values = %{1 => 0, 2 => 0, 3 => 0}
       set_registers(device, initial_values)
@@ -375,11 +411,46 @@ defmodule ModBossTest do
       assert %{10 => 0, 11 => 10, 12 => 20, 13 => -1, 14 => -2} = get_registers(device)
     end
 
+    test "encodes values per the `:as` option" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+        alias ModBoss.Encoding
+
+        modbus_schema do
+          # Assumes the function lives in the current module…
+          holding_register 1, :yep, as: :boolean, mode: :w
+          holding_register 2, :nope, as: :boolean, mode: :w
+
+          # Can explicitly specify the module
+          holding_register 3..5, :text, as: {Encoding, :ascii}, mode: :w
+        end
+
+        def encode_boolean(false), do: {:ok, 0}
+        def encode_boolean(true), do: {:ok, 1}
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      :ok = ModBoss.write(schema, write_func(device), %{yep: true, nope: false, text: "Oh wow"})
+
+      assert %{
+               1 => 1,
+               2 => 0,
+               3 => 20328,
+               4 => 8311,
+               5 => 28535
+             } = get_registers(device)
+    end
+
     test "returns an error if the number of values doesn't match the number of registers" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       assert {:error,
-              "Failed to encode :qux. Encoded value `[100, 200]` does not match the expected number of registers."} =
+              "Failed to encode :qux. Encoded value [100, 200] for :qux does not match the number of registers."} =
                ModBoss.write(FakeSchema, write_func(device), %{qux: [100, 200]})
     end
 

@@ -316,8 +316,15 @@ defmodule ModBoss do
     end)
   end
 
-  defp decode_value(mapping) do
-    {:ok, mapping.encoded_value}
+  defp decode_value(%Mapping{as: {module, as}} = mapping) do
+    function = String.to_atom("decode_" <> "#{as}")
+    args = [mapping.encoded_value]
+
+    if exists?(module, function) do
+      apply(module, function, args)
+    else
+      raise "ModBoss mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."
+    end
   end
 
   defp encode(mappings) do
@@ -335,16 +342,38 @@ defmodule ModBoss do
     end)
   end
 
-  defp encode_value(mapping) do
-    # Temporary; we'll add a translation layer here to encode the value
-    encoded = mapping.value
-    value_count = List.wrap(encoded) |> length()
+  defp encode_value(%Mapping{as: {module, as}} = mapping) do
+    function = String.to_atom("encode_" <> "#{as}")
+    args = [mapping.value]
 
-    if mapping.register_count == value_count do
-      {:ok, encoded}
+    if exists?(module, function) do
+      # 65_536
+      {:ok, encoded} = apply(module, function, args)
+      value_count = List.wrap(encoded) |> length()
+
+      if mapping.register_count == value_count do
+        {:ok, encoded}
+      else
+        {:error,
+         "Encoded value #{inspect(encoded)} for #{inspect(mapping.name)} does not match the number of registers."}
+      end
     else
-      msg = "Encoded value `#{inspect(encoded)}` does not match the expected number of registers."
-      {:error, msg}
+      {:error,
+       "ModBoss mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."}
+    end
+  end
+
+
+  defp exists?(module, function) do
+    module
+    |> ensure_module_loaded!()
+    |> function_exported?(function, 1)
+  end
+
+  defp ensure_module_loaded!(module) do
+    case Code.ensure_loaded(module) do
+      {:module, ^module} -> module
+      {:error, reason} -> raise("Unable to load #{inspect(module)}: #{inspect(reason)}")
     end
   end
 end

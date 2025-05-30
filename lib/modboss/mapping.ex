@@ -7,15 +7,17 @@ defmodule ModBoss.Mapping do
             addresses: nil,
             starting_address: nil,
             register_count: nil,
-            encoded_value: nil,
+            as: nil,
             value: nil,
+            encoded_value: nil,
             mode: :r
 
   defguardp is_address_or_range(address) when is_integer(address) or is_struct(address, Range)
 
-  def new(name, type, addresses, opts \\ [])
-      when is_atom(name) and is_address_or_range(addresses) and is_list(opts) do
+  def new(module, name, type, addresses, opts \\ [])
+      when is_atom(module) and is_atom(name) and is_address_or_range(addresses) and is_list(opts) do
     {address_range, starting_address, register_count} = registers(addresses)
+    as = Keyword.get(opts, :as) |> expand_as(module)
 
     opts =
       Keyword.merge(opts,
@@ -23,12 +25,26 @@ defmodule ModBoss.Mapping do
         type: type,
         addresses: address_range,
         starting_address: starting_address,
-        register_count: register_count
+        register_count: register_count,
+        as: as
       )
 
     __MODULE__
     |> struct!(opts)
     |> validate!(:mode)
+    |> validate!(:as)
+  end
+
+  defp expand_as(nil, _schema_module) do
+    {ModBoss.Encoding, :raw}
+  end
+
+  defp expand_as({module, as}, _schema_module) when is_atom(module) and is_atom(as) do
+    {module, as}
+  end
+
+  defp expand_as(as, schema_module) when is_atom(as) and is_atom(schema_module) do
+    {schema_module, as}
   end
 
   defp validate!(mapping, :mode) do
@@ -39,6 +55,17 @@ defmodule ModBoss.Mapping do
       {:coil, mode} when mode in [:r, :rw, :w] -> mapping
       {type, mode} -> raise("Invalid mode #{inspect(mode)} for #{type} #{inspect(mapping.name)}")
     end
+  end
+
+  defp validate!(%{as: nil} = mapping, :as), do: mapping
+
+  defp validate!(%{as: {module, func}} = mapping, :as) when is_atom(module) and is_atom(func) do
+    mapping
+  end
+
+  defp validate!(mapping, field) do
+    value = Map.fetch!(mapping, field)
+    raise "Invalid ModBoss option #{inspect([{field, value}])} for #{inspect(mapping.name)}."
   end
 
   defp registers(addresses) do
