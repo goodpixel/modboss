@@ -76,7 +76,7 @@ defmodule ModBoss.Schema do
       """
     end
 
-    with %Mapping{} = mapping <- Mapping.new(name, register_type, address_or_range, opts) do
+    with %Mapping{} = mapping <- Mapping.new(module, name, register_type, address_or_range, opts) do
       Module.put_attribute(module, :register_mappings, mapping)
     end
   end
