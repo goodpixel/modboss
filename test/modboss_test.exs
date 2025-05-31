@@ -446,6 +446,26 @@ defmodule ModBossTest do
              } = get_registers(device)
     end
 
+    test "returns an error if a value is too large for its holding register" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        modbus_schema do
+          holding_register 1, :foo, mode: :w
+          holding_register 2..3, :bar, mode: :w
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert {:ok, error} = ModBoss.write(schema, write_func(device), %{foo: 65_536})
+      error |> dbg
+    end
+
     test "returns an error if the number of values doesn't match the number of registers" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
