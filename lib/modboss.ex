@@ -28,9 +28,9 @@ defmodule ModBoss do
   Read modbus registers from the schema in `module` by name using `read_func`.
 
   This function takes either an atom or a list of atoms representing the mappings to read.
-  If a single atom is provided, the result will be the singular value for that named mapping. If
-  a list of atoms is given, the result will be a map with maping names as keys and mapping values
-  as results.
+  If a single atom is provided, the result will be an :ok tuple including the singular value
+  for that named mapping. If a list of atoms is given, the result will be an :ok tuple including
+  a map with mapping names as keys and mapping values as results.
 
   ModBoss batches reads for contiguous registers of the same type.
 
@@ -40,6 +40,7 @@ defmodule ModBoss do
 
   ## Examples
 
+      # Read a single mapping
       ModBoss.read(
         SchemaModule,
         fn
@@ -49,7 +50,7 @@ defmodule ModBoss do
       )
       1234
 
-
+      # Read multiple mappings
       ModBoss.read(
         SchemaModule,
         fn
