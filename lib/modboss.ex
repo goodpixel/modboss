@@ -305,28 +305,6 @@ defmodule ModBoss do
     end)
   end
 
-  @spec decode([Mapping.t()]) :: {:ok, [Mapping.t()]}
-  defp decode(mappings) do
-    Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
-      case decode_value(mapping) do
-        {:ok, decoded_value} ->
-          updated_mapping = %{mapping | value: decoded_value}
-          {:cont, {:ok, [updated_mapping | acc]}}
-      end
-    end)
-  end
-
-  defp decode_value(%Mapping{as: {module, as}} = mapping) do
-    function = String.to_atom("decode_" <> "#{as}")
-    args = [mapping.encoded_value]
-
-    if exists?(module, function) do
-      apply(module, function, args)
-    else
-      raise "ModBoss mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."
-    end
-  end
-
   defp encode(mappings) do
     Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
       case encode_value(mapping) do
@@ -342,32 +320,84 @@ defmodule ModBoss do
     end)
   end
 
-  defp encode_value(%Mapping{as: {module, as}} = mapping) do
-    function = String.to_atom("encode_" <> "#{as}")
-    args = [mapping.value]
-
-    if exists?(module, function) do
-      # 65_536
-      {:ok, encoded} = apply(module, function, args)
-      value_count = List.wrap(encoded) |> length()
-
-      if mapping.register_count == value_count do
-        {:ok, encoded}
-      else
-        {:error,
-         "Encoded value #{inspect(encoded)} for #{inspect(mapping.name)} does not match the number of registers."}
-      end
-    else
-      {:error,
-       "ModBoss mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."}
+  defp encode_value(%Mapping{} = mapping) do
+    with {module, function, args} <- get_encode_mfa(mapping),
+         {:ok, encoded} <- apply(module, function, args),
+         :ok <- verify_register_count(mapping, encoded) do
+      {:ok, encoded}
     end
   end
 
+  defp get_encode_mfa(%Mapping{as: {module, as}} = mapping) do
+    function = String.to_atom("encode_" <> "#{as}")
 
-  defp exists?(module, function) do
+    # In an effort to keep the API simple, when we call a user-defined encode function,
+    # we only pass the value to be encoded.
+    #
+    # However, when calling built-in encoding functions, we pass both the value to be encoded
+    # _and_ the mapping. We do this because in some cases we need to know how many registers
+    # we're encoding for in order to provide truly generic encoders. For example, when encoding
+    # a string to ASCII, we may need to add padding to fill out the mapped registers.
+    arguments =
+      case module do
+        ModBoss.Encoding -> [mapping.value, mapping]
+        _other -> [mapping.value]
+      end
+
+    if exists?(module, function, length(arguments)) do
+      {module, function, arguments}
+    else
+      {:error,
+       "Modbus mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."}
+    end
+  end
+
+  @spec decode([Mapping.t()]) :: {:ok, [Mapping.t()]}
+  defp decode(mappings) do
+    Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
+      case decode_value(mapping) do
+        {:ok, decoded_value} ->
+          updated_mapping = %{mapping | value: decoded_value}
+          {:cont, {:ok, [updated_mapping | acc]}}
+      end
+    end)
+  end
+
+  defp decode_value(%Mapping{} = mapping) do
+    with {module, function, args} <- get_decode_mfa(mapping) do
+      apply(module, function, args)
+    end
+  end
+
+  defp get_decode_mfa(%Mapping{as: {module, as}} = mapping) do
+    function = String.to_atom("decode_" <> "#{as}")
+    arguments = [mapping.encoded_value]
+
+    if exists?(module, function, length(arguments)) do
+      {module, function, arguments}
+    else
+      {:error,
+       "Modbus mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."}
+    end
+  end
+
+  defp verify_register_count(mapping, encoded) do
+    expected_count = mapping.register_count
+
+    case List.wrap(encoded) |> length() do
+      ^expected_count ->
+        :ok
+
+      _ ->
+        {:error,
+         "Encoded value #{inspect(encoded)} for #{inspect(mapping.name)} does not match the number of registers."}
+    end
+  end
+
+  defp exists?(module, function, arity) do
     module
     |> ensure_module_loaded!()
-    |> function_exported?(function, 1)
+    |> function_exported?(function, arity)
   end
 
   defp ensure_module_loaded!(module) do
