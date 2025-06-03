@@ -9,12 +9,11 @@ defmodule ModBoss do
 
   @typep mode :: :readable | :writable
   @type register_type :: :holding_register | :input_register | :coil | :discrete_input
-  @type mapping_assignment :: {name :: atom(), any()}
   @type read_func :: (register_type(), starting_address :: integer(), count :: integer() ->
                         {:ok, any()} | {:error, any()})
   @type write_func :: (register_type(), starting_address :: integer(), value_or_values :: any() ->
                          :ok | {:error, any()})
-  @type values_to_write :: mapping_assignment() | [mapping_assignment()]
+  @type values_to_write :: [{atom(), any()}] | %{atom() => any()}
 
   @doc """
   Read modbus registers from the schema in `module` using `read_func`.
@@ -25,40 +24,35 @@ defmodule ModBoss do
   end
 
   @doc """
-  Read modbus registers from the schema in `module` by name.
+  Read from modbus using named mappings.
 
-  This function takes either an atom or a list of atoms representing the mappings to read.
-  If a single atom is provided, the result will be an :ok tuple including the singular value
-  for that named mapping. If a list of atoms is given, the result will be an :ok tuple including
-  a map with mapping names as keys and mapping values as results.
+  This function takes either an atom or a list of atoms representing the mappings to read,
+  batches the mappings into contiguous addresses per type, then reads and decodes the values
+  before returning them.
 
-  ModBoss batches reads for contiguous registers of the same type.
+  For each batch, `read_func` will be called with the type of register (`:holding_register`,
+  `:input_register`, `:coil`, or `:discrete_input`), the starting address for the batch
+  to be read, and the count of addresses to read from. It must return either `{:ok, result}`
+  or `{:error, message}`.
 
-  ## Opts
-  * `:translate` — returns the translated value if `true` or the raw register value(s) if false
-    (defaults to `true`)
+  If a single name is requested, the result will be an :ok tuple including the singule result
+  for that named mapping. If a list of names is requested, the result will be an :ok tuple
+  including a map with mapping names as keys and mapping values as results.
 
   ## Examples
 
-      # Read a single mapping
-      ModBoss.read(
-        SchemaModule,
-        fn
-          register_type, starting_address, count -> some_read_logic(...)
-        end,
-        :mapping1
-      )
-      1234
+      read_func = fn register_type, starting_address, count ->
+        result = custom_read_logic(…)
+        {:ok, result}
+      end
+
+      # Read one mapping
+      ModBoss.read(SchemaModule, read_func, :foo)
+      {:ok, 75}
 
       # Read multiple mappings
-      ModBoss.read(
-        SchemaModule,
-        fn
-          register_type, starting_address, count -> some_read_logic(...)
-        end,
-        [:mapping1, :mapping2, :mapping3]
-      )
-      %{mapping1: 1234, mapping2: 2345, mapping3: 3456}
+      ModBoss.read(SchemaModule, read_func, [:foo, :bar, :baz])
+      {:ok, %{foo: 75, bar: "ABC", baz: true}}
   """
   @spec read(module(), read_func(), atom() | [atom()]) :: {:ok, any()} | {:error, any()}
   def read(module, read_func, name_or_names) do
@@ -87,12 +81,14 @@ defmodule ModBoss do
   end
 
   @doc """
-  Write modbus registers by name using `write_func`.
+  Write to modbus using named mappings.
 
   ModBoss automatically encodes your `values`, then batches any encoded values destined for
   contiguous registers—creating separate batches per register type.
 
-  `write_func` must return either `:ok` or an `{:error, reason}` tuple.
+  For each batch, `write_func` will be called with the type of register (`:holding_register` or
+  `:coil`), the starting address for the batch to be written, and a list of values to write.
+  It must return either `:ok` or `{:error, message}`.
 
   > #### Batch values {: .info}
   >
@@ -110,26 +106,13 @@ defmodule ModBoss do
 
   ## Example
 
-      defmodule DeviceDriver do
-        @device_address 101
-
-        defp modbus_pid do
-          # …
-        end
-
-        # Provide a wrapper function for the Modbus library of your choosing…
-        def write(register_type, starting_address, value_or_values) do
-          command = case register_type do
-            :holding_register -> {:phr, @device_address, starting_address, value_or_values}
-            :coil -> {:fc, @device_address, starting_address, value_or_values}
-          end
-
-          ModbusLibrary.request(modbus_pid(), command)
-        end
+      write_func = fn register_type, starting_address, value_or_values ->
+        result = custom_write_logic(…)
+        {:ok, result}
       end
 
-      ModBoss.write(DeviceSchema, &DeviceDriver.write/3, %{heat_setpoint: 68, cool_setpoint: 73})
-      #=> :ok
+      iex> ModBoss.write(MyDevice.Schema, write_func, foo: 75, bar: "ABC")
+      :ok
   """
   @spec write(module(), write_func(), values_to_write()) :: :ok | {:error, any()}
   def write(module, write_func, values) when is_atom(module) and is_function(write_func) do

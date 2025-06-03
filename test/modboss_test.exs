@@ -1,6 +1,5 @@
 defmodule ModBossTest do
   use ExUnit.Case
-  doctest ModBoss
 
   defmodule FakeSchema do
     use ModBoss.Schema

@@ -36,8 +36,8 @@ defmodule ModBoss.MixProject do
 
   defp docs do
     [
-      main: "README",
-      logo: "assets/boss.jpeg",
+      main: "readme",
+      logo: "assets/boss-t.png",
       extras: ["README.md": [title: "Overview"]],
       assets: %{"assets" => "assets"}
     ]
