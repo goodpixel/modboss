@@ -2,11 +2,26 @@ defmodule ModBoss.Encoding do
   @moduledoc """
   Built-in encoding/decoding functions to get you started.
 
-  Note that for provided `encode_*` functions, we pass not just the value but also the mapping
+  ## Automatic encoding/decoding
+
+  Depending on whether a mapping is flagged as readable/writable, it is expected that you
+  will provide functions with `encode_` or `decode_` prepended to the value provided by the `:as`
+  option.
+
+  For example, if you specify `as: :my_type` for a read-only register, ModBoss will expect that
+  the schema module defines an `encode_my_type/1` function that accepts the value to encode and
+  returns either `{:ok, encoded_value}` or `{:error, messsage}`.
+
+  If the function to be used lives outside of the current module, a tuple including the module
+  name can be passed. For example, you can use the built-in ASCII decoder from ModBoss via
+
+  ### Built-in encoders
+
+  Note that for built-in `encode_*` functions, we pass not just the value but also the mapping
   itself. We do this in order to provide more generic and helpful functions out the box (like
   encoding of ASCII, which requires knowledge of how many registers we're encoding for). However,
-  when providing your own `encode_*` functions, to keep things simpler, we just pass the value to
-  be encoded—not the mapping.
+  when providing your own `encode_*` functions, you'll only accept the value to be encoded
+  (and not the mapping).
   """
 
   import Bitwise

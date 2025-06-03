@@ -1,4 +1,4 @@
-defmodule Modboss.MappingTest do
+defmodule ModBoss.MappingTest do
   use ExUnit.Case
   alias ModBoss.Mapping
 

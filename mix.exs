@@ -11,7 +11,8 @@ defmodule ModBoss.MixProject do
         check_plt: true
       ],
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      docs: docs()
     ]
   end
 
@@ -30,6 +31,15 @@ defmodule ModBoss.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true}
+    ]
+  end
+
+  defp docs do
+    [
+      main: "README",
+      logo: "assets/boss.jpeg",
+      extras: ["README.md": [title: "Overview"]],
+      assets: %{"assets" => "assets"}
     ]
   end
 end

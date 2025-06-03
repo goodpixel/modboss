@@ -2,19 +2,19 @@ defmodule ModBoss do
   @moduledoc """
   Human-friendly modbus reading, writing, and translation.
 
-  Read and write modbus values by name, with automatic decoding and encoding.
+  Read and write modbus values by name, with automatic encoding and decoding.
   """
 
   alias ModBoss.Mapping
 
   @typep mode :: :readable | :writable
   @type register_type :: :holding_register | :input_register | :coil | :discrete_input
-  @type mapping_name :: atom()
-  @type value :: any()
-  @type mapping_assignment :: {mapping_name(), value()}
-  @type read_func :: (register_type(), integer(), integer() -> {:ok, any()} | {:error, any()})
-  @type write_func :: (register_type(), integer(), any() -> :ok | {:error, any()})
-  @type values_to_write :: %{mapping_name() => value()} | [mapping_assignment()]
+  @type mapping_assignment :: {name :: atom(), any()}
+  @type read_func :: (register_type(), starting_address :: integer(), count :: integer() ->
+                        {:ok, any()} | {:error, any()})
+  @type write_func :: (register_type(), starting_address :: integer(), value_or_values :: any() ->
+                         :ok | {:error, any()})
+  @type values_to_write :: mapping_assignment() | [mapping_assignment()]
 
   @doc """
   Read modbus registers from the schema in `module` using `read_func`.
@@ -25,7 +25,7 @@ defmodule ModBoss do
   end
 
   @doc """
-  Read modbus registers from the schema in `module` by name using `read_func`.
+  Read modbus registers from the schema in `module` by name.
 
   This function takes either an atom or a list of atoms representing the mappings to read.
   If a single atom is provided, the result will be an :ok tuple including the singular value
@@ -96,8 +96,8 @@ defmodule ModBoss do
 
   > #### Batch values {: .info}
   >
-  > Each batch will contain **either a list or an individual value**, so
-  > you should be prepared for either.
+  > Each batch will contain **either a list or an individual value** based on the number of
+  > addresses to be written—so you should be prepared for both.
 
   > #### Non-atomic writes! {: .warning}
   >
