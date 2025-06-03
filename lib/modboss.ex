@@ -16,11 +16,15 @@ defmodule ModBoss do
   @type values_to_write :: [{atom(), any()}] | %{atom() => any()}
 
   @doc """
-  Read modbus registers from the schema in `module` using `read_func`.
+  Read *all* readable modbus registers from the schema.
   """
-    names = module.__modbus_schema__() |> Map.keys()
-    read(module, read_func, names)
   def read_all(module, read_func, opts \\ []) do
+    readable_mappings =
+      module.__modbus_schema__()
+      |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
+      |> Enum.map(fn {name, _mapping} -> name end)
+
+    read(module, read_func, readable_mappings, opts)
   end
 
   @doc """
@@ -57,6 +61,10 @@ defmodule ModBoss do
       ModBoss.read(SchemaModule, read_func, [:foo, :bar, :baz])
       {:ok, %{foo: 75, bar: "ABC", baz: true}}
 
+      # Read *all* readable mappings
+      ModBoss.read(SchemaModule, read_func, :all)
+      {:ok, %{foo: 75, bar: "ABC", baz: true, qux: 1024}}
+
       # Get "raw" Modbus values (as returned by `read_func`)
       ModBoss.read(SchemaModule, read_func, :all, decode: false)
       {:ok, %{foo: 75, bar: [16706, 17152], baz: 1, qux: 1024}}
@@ -64,8 +72,14 @@ defmodule ModBoss do
   @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
           {:ok, any()} | {:error, any()}
   def read(module, read_func, name_or_names, opts \\ []) do
+    readable_mappings =
+      module.__modbus_schema__()
+      |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
+      |> Enum.map(fn {name, _mapping} -> name end)
+
     {names, plurality} =
       case name_or_names do
+        :all -> {readable_mappings, :plural}
         name when is_atom(name) -> {[name], :singular}
         names when is_list(names) -> {names, :plural}
       end
