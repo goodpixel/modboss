@@ -18,9 +18,9 @@ defmodule ModBoss do
   @doc """
   Read modbus registers from the schema in `module` using `read_func`.
   """
-  def read_all(module, read_func) do
     names = module.__modbus_schema__() |> Map.keys()
     read(module, read_func, names)
+  def read_all(module, read_func, opts \\ []) do
   end
 
   @doc """
@@ -39,6 +39,9 @@ defmodule ModBoss do
   for that named mapping. If a list of names is requested, the result will be an :ok tuple
   including a map with mapping names as keys and mapping values as results.
 
+  ## Opts
+    * `:decode` — if `false`, returns the "raw" result as provided by `read_func`; defaults to `true`
+
   ## Examples
 
       read_func = fn register_type, starting_address, count ->
@@ -53,9 +56,14 @@ defmodule ModBoss do
       # Read multiple mappings
       ModBoss.read(SchemaModule, read_func, [:foo, :bar, :baz])
       {:ok, %{foo: 75, bar: "ABC", baz: true}}
+
+      # Get "raw" Modbus values (as returned by `read_func`)
+      ModBoss.read(SchemaModule, read_func, :all, decode: false)
+      {:ok, %{foo: 75, bar: [16706, 17152], baz: 1, qux: 1024}}
   """
-  @spec read(module(), read_func(), atom() | [atom()]) :: {:ok, any()} | {:error, any()}
-  def read(module, read_func, name_or_names) do
+  @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
+          {:ok, any()} | {:error, any()}
+  def read(module, read_func, name_or_names, opts \\ []) do
     {names, plurality} =
       case name_or_names do
         name when is_atom(name) -> {[name], :singular}
@@ -65,13 +73,15 @@ defmodule ModBoss do
     with {:ok, mappings} <- get_mappings(:readable, module, names),
          {:ok, mappings} <- read_registers(module, mappings, read_func),
          {:ok, mappings} <- decode(mappings) do
-      collect_results(mappings, plurality)
+      collect_results(mappings, plurality, opts)
     end
   end
 
-  defp collect_results(mappings, plurality) do
+  defp collect_results(mappings, plurality, opts) do
+    field_to_return = if Keyword.get(opts, :decode, true), do: :value, else: :encoded_value
+
     mappings
-    |> Enum.map(&{&1.name, Map.get(&1, :value)})
+    |> Enum.map(&{&1.name, Map.get(&1, field_to_return)})
     |> then(fn results ->
       case {results, plurality} do
         {[{_, return_value}], :singular} -> {:ok, return_value}
