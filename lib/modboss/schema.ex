@@ -1,4 +1,12 @@
 defmodule ModBoss.Schema do
+  @moduledoc """
+  Macros for establishing Modbus schema.
+
+  The schema allows names to be assigned to individual registers or groups of contiguous
+  registers along with encoder/decoder functions. It also allows registers to be flagged
+  as readable and/or writable.
+  """
+
   alias ModBoss.Mapping
 
   defmacro __using__(opts) do
@@ -16,6 +24,9 @@ defmodule ModBoss.Schema do
     end
   end
 
+  @doc """
+  Establishes a Modbus schema in the current module.
+  """
   defmacro modbus_schema(do: block) do
     quote do
       (fn ->
@@ -36,6 +47,14 @@ defmodule ModBoss.Schema do
     end
   end
 
+  @doc """
+  Adds a holding register to a schema.
+
+  ## Opts
+  * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
+  * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
+    See explanation of [automatic encoding/decoding](ModBoss.Encoding.html#module-automatic-encoding-decoding).
+  """
   defmacro holding_register(addresses, name, opts \\ []) do
     module = __CALLER__.module
 
@@ -44,6 +63,13 @@ defmodule ModBoss.Schema do
     end
   end
 
+  @doc """
+  Adds a read-only input register to a schema.
+
+  ## Opts
+  * `:as` — Determines which decoding functions to use when reading values.
+    See explanation of [automatic encoding/decoding](ModBoss.Encoding.html#module-automatic-encoding-decoding).
+  """
   defmacro input_register(addresses, name, opts \\ []) do
     module = __CALLER__.module
 
@@ -52,6 +78,14 @@ defmodule ModBoss.Schema do
     end
   end
 
+  @doc """
+  Adds a coil to a schema.
+
+  ## Opts
+  * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
+  * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
+    See explanation of [automatic encoding/decoding](ModBoss.Encoding.html#module-automatic-encoding-decoding).
+  """
   defmacro coil(addresses, name, opts \\ []) do
     module = __CALLER__.module
 
@@ -60,6 +94,13 @@ defmodule ModBoss.Schema do
     end
   end
 
+  @doc """
+  Adds a read-only discrete input to a schema.
+
+  ## Opts
+  * `:as` — Determines which decoding functions to use when reading values.
+    See explanation of [automatic encoding/decoding](ModBoss.Encoding.html#module-automatic-encoding-decoding).
+  """
   defmacro discrete_input(addresses, name, opts \\ []) do
     module = __CALLER__.module
 
@@ -68,6 +109,7 @@ defmodule ModBoss.Schema do
     end
   end
 
+  @doc false
   def create_register_mapping(module, register_type, address_or_range, name, opts) do
     if not Module.has_attribute?(module, :register_mappings) do
       raise """
@@ -76,7 +118,7 @@ defmodule ModBoss.Schema do
       """
     end
 
-    with %Mapping{} = mapping <- Mapping.new(name, register_type, address_or_range, opts) do
+    with %Mapping{} = mapping <- Mapping.new(module, name, register_type, address_or_range, opts) do
       Module.put_attribute(module, :register_mappings, mapping)
     end
   end

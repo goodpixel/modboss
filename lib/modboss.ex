@@ -2,19 +2,19 @@ defmodule ModBoss do
   @moduledoc """
   Human-friendly modbus reading, writing, and translation.
 
-  Read and write modbus values by name, with automatic decoding and encoding.
+  Read and write modbus values by name, with automatic encoding and decoding.
   """
 
   alias ModBoss.Mapping
 
   @typep mode :: :readable | :writable
   @type register_type :: :holding_register | :input_register | :coil | :discrete_input
-  @type mapping_name :: atom()
-  @type value :: any()
-  @type mapping_assignment :: {mapping_name(), value()}
-  @type read_func :: (register_type(), integer(), integer() -> {:ok, any()} | {:error, any()})
-  @type write_func :: (register_type(), integer(), any() -> :ok | {:error, any()})
-  @type values_to_write :: %{mapping_name() => value()} | [mapping_assignment()]
+  @type mapping_assignment :: {name :: atom(), any()}
+  @type read_func :: (register_type(), starting_address :: integer(), count :: integer() ->
+                        {:ok, any()} | {:error, any()})
+  @type write_func :: (register_type(), starting_address :: integer(), value_or_values :: any() ->
+                         :ok | {:error, any()})
+  @type values_to_write :: mapping_assignment() | [mapping_assignment()]
 
   @doc """
   Read modbus registers from the schema in `module` using `read_func`.
@@ -25,12 +25,12 @@ defmodule ModBoss do
   end
 
   @doc """
-  Read modbus registers from the schema in `module` by name using `read_func`.
+  Read modbus registers from the schema in `module` by name.
 
   This function takes either an atom or a list of atoms representing the mappings to read.
-  If a single atom is provided, the result will be the singular value for that named mapping. If
-  a list of atoms is given, the result will be a map with maping names as keys and mapping values
-  as results.
+  If a single atom is provided, the result will be an :ok tuple including the singular value
+  for that named mapping. If a list of atoms is given, the result will be an :ok tuple including
+  a map with mapping names as keys and mapping values as results.
 
   ModBoss batches reads for contiguous registers of the same type.
 
@@ -40,6 +40,7 @@ defmodule ModBoss do
 
   ## Examples
 
+      # Read a single mapping
       ModBoss.read(
         SchemaModule,
         fn
@@ -49,7 +50,7 @@ defmodule ModBoss do
       )
       1234
 
-
+      # Read multiple mappings
       ModBoss.read(
         SchemaModule,
         fn
@@ -95,8 +96,8 @@ defmodule ModBoss do
 
   > #### Batch values {: .info}
   >
-  > Each batch will contain **either a list or an individual value**, so
-  > you should be prepared for either.
+  > Each batch will contain **either a list or an individual value** based on the number of
+  > addresses to be written—so you should be prepared for both.
 
   > #### Non-atomic writes! {: .warning}
   >
@@ -304,21 +305,6 @@ defmodule ModBoss do
     end)
   end
 
-  @spec decode([Mapping.t()]) :: {:ok, [Mapping.t()]}
-  defp decode(mappings) do
-    Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
-      case decode_value(mapping) do
-        {:ok, decoded_value} ->
-          updated_mapping = %{mapping | value: decoded_value}
-          {:cont, {:ok, [updated_mapping | acc]}}
-      end
-    end)
-  end
-
-  defp decode_value(mapping) do
-    {:ok, mapping.encoded_value}
-  end
-
   defp encode(mappings) do
     Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
       case encode_value(mapping) do
@@ -334,16 +320,90 @@ defmodule ModBoss do
     end)
   end
 
-  defp encode_value(mapping) do
-    # Temporary; we'll add a translation layer here to encode the value
-    encoded = mapping.value
-    value_count = List.wrap(encoded) |> length()
-
-    if mapping.register_count == value_count do
+  defp encode_value(%Mapping{} = mapping) do
+    with {module, function, args} <- get_encode_mfa(mapping),
+         {:ok, encoded} <- apply(module, function, args),
+         :ok <- verify_register_count(mapping, encoded) do
       {:ok, encoded}
+    end
+  end
+
+  defp get_encode_mfa(%Mapping{as: {module, as}} = mapping) do
+    function = String.to_atom("encode_" <> "#{as}")
+
+    # In an effort to keep the API simple, when we call a user-defined encode function,
+    # we only pass the value to be encoded.
+    #
+    # However, when calling built-in encoding functions, we pass both the value to be encoded
+    # _and_ the mapping. We do this because in some cases we need to know how many registers
+    # we're encoding for in order to provide truly generic encoders. For example, when encoding
+    # a string to ASCII, we may need to add padding to fill out the mapped registers.
+    arguments =
+      case module do
+        ModBoss.Encoding -> [mapping.value, mapping]
+        _other -> [mapping.value]
+      end
+
+    if exists?(module, function, length(arguments)) do
+      {module, function, arguments}
     else
-      msg = "Encoded value `#{inspect(encoded)}` does not match the expected number of registers."
-      {:error, msg}
+      {:error,
+       "Modbus mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."}
+    end
+  end
+
+  @spec decode([Mapping.t()]) :: {:ok, [Mapping.t()]}
+  defp decode(mappings) do
+    Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
+      case decode_value(mapping) do
+        {:ok, decoded_value} ->
+          updated_mapping = %{mapping | value: decoded_value}
+          {:cont, {:ok, [updated_mapping | acc]}}
+      end
+    end)
+  end
+
+  defp decode_value(%Mapping{} = mapping) do
+    with {module, function, args} <- get_decode_mfa(mapping) do
+      apply(module, function, args)
+    end
+  end
+
+  defp get_decode_mfa(%Mapping{as: {module, as}} = mapping) do
+    function = String.to_atom("decode_" <> "#{as}")
+    arguments = [mapping.encoded_value]
+
+    if exists?(module, function, length(arguments)) do
+      {module, function, arguments}
+    else
+      {:error,
+       "Modbus mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."}
+    end
+  end
+
+  defp verify_register_count(mapping, encoded) do
+    expected_count = mapping.register_count
+
+    case List.wrap(encoded) |> length() do
+      ^expected_count ->
+        :ok
+
+      _ ->
+        {:error,
+         "Encoded value #{inspect(encoded)} for #{inspect(mapping.name)} does not match the number of registers."}
+    end
+  end
+
+  defp exists?(module, function, arity) do
+    module
+    |> ensure_module_loaded!()
+    |> function_exported?(function, arity)
+  end
+
+  defp ensure_module_loaded!(module) do
+    case Code.ensure_loaded(module) do
+      {:module, ^module} -> module
+      {:error, reason} -> raise("Unable to load #{inspect(module)}: #{inspect(reason)}")
     end
   end
 end

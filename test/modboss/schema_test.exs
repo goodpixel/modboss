@@ -1,4 +1,4 @@
-defmodule Modboss.SchemaTest do
+defmodule ModBoss.SchemaTest do
   use ExUnit.Case
 
   defmodule ExampleSchema do
