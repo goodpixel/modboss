@@ -2,14 +2,13 @@
 
 <img alt="ModBoss logo" width="500px" src="assets/boss.jpeg">
 
+[![Elixir CI](https://github.com/goodpixel/modboss/actions/workflows/elixir.yml/badge.svg?branch=main)](https://github.com/goodpixel/modboss/actions/workflows/elixir.yml)
+
 ## Show that Bus who's Boss!
 
 ModBoss is an Elixir library that maps Modbus registers to human-friendly names and provides
-automatic encoding/decoding of values.
-
-Instead of reading/writing modbus registers by number and cluttering your application logic up
-with encoding/decoding logic, ModBoss lets you to refer to registers using human-friendly names
-and allows you to consolidate your encoding/decoding logic separately from your device drivers.
+automatic encoding/decoding of values—making your application logic simpler and more readable,
+and making testing of modbus concerns easier.
 
 Note that ModBoss doesn't handle the actual reading/writing of modbus registers—it simply assists
 in providing friendlier access to register values. You'll likely be wrapping another library such
@@ -30,7 +29,19 @@ end
 
 ## Usage
 
-### Map your schema
+### 1. Map your schema
+
+Starting with the type of register, you'll define the addresses to include and a friendly name
+for the mapping.
+
+The `:as` option dictates how values will be encoded before being written to Modbus or decoded
+after being read from Modbus. You can use translation functions from another module—like those
+found in `ModBoss.Encoding`—or provide your own as shown here with `as: :fw_version`.
+
+When providing your own translation functions, ModBoss expects that you'll provide functions
+corresponding to the `:as` option but with `encode_` / `decode_` prefixes added as applicable.
+These functions will receive the value to be translated and should return either
+`{:ok, translated_value}` or `{:error, message}`.
 
 ```elixir
 defmodule MyDevice.Schema do
@@ -40,7 +51,7 @@ defmodule MyDevice.Schema do
     holding_register 1, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
     holding_register 2..5, :model_name, as: {ModBoss.Encoding, :ascii}
     holding_register 6, :version, as: :fw_version, mode: :rw
-    # Also supports: input_regster / coil / discrete_input
+    # Also supports: input_register / coil / discrete_input
   end
 
   def encode_fw_version(value) do
@@ -56,53 +67,70 @@ end
 ```
 
 In this example:
-* Holding register at address 1 is named `outdoor_temp` and uses a built-in `unsigned_int` decoder
-  that ships with ModBoss.
-* Holding registers 2 through 5 are grouped under the name `model_name` and use a built-in decode.
-* Holding register 6 is named `version` and specifies `as: :fw_version`. In this case, ModBoss
-  expects you to provide corresponding `encode_fw_version` and `decode_fw_version` functions—both
-  of which must take the value to be translated and return an `{:ok, value}` tuple if successful
-  and an `{:error, message}` tuple if the value cannot be translated.
+* **Holding register at address 1** is named `outdoor_temp` and uses the built-in `signed_int`
+  decoder that ships with ModBoss.
+* **Holding registers 2–5** are grouped under the name `model_name` and use a built-in ASCII
+  decoder.
+* **Holding register 6** is named `version` and uses `encode_fw_version/1` and `decode_fw_version/1`
+  to translate values being written or read respectively.
 
-### BYOM (Bring your own Modbus reader/writer)
+### 2. Provide generic read/write functions
 
-You'll need to bring your own utility for actually reading and writing on the Modbus, but ModBoss
-will automatically batch those reads and writes into contiguous addresses for each separate type.
+You'll need to provide a `read_func/3` and a `write func/3` for actually
+interacting on the Modbus. In practice, these functions will likely build on a library like
+[Modbux](https://hexdocs.pm/modbux/readme.html) along with state stored in a GenServer (e.g.
+a `modbux_pid`, IP Address, etc.) to perform the read/write operations.
+
+For each batch, the read_func will be provided the type of register
+(`:holding_register`, `:input_register`, `:coil`, or `:discrete_input`), the starting address,
+and the number of addresses to read. It must return either `{:ok, result}` or `{:error, message}`.
 
 ```elixir
-# Will be called once for each batch of contiguous registers.
-# Receives :holding_register, :input_register, :coil, or :discrete_input as `register_type`.
 read_func = fn register_type, starting_address, count ->
-  # read modbus
-end
-
-# Will be called once for each batch of contiguous registers.
-# Receives :holding_register or :coil as `register_type`.
-# Receives either a single value to be written or a list of values depending on how many
-# registers to be written are in this batch.
-write_func = fn register_type, starting_address, value_or_values ->
-  # write modbus
+  result = custom_read_logic(…)
+  {:ok, result}
 end
 ```
 
-### Read & Write by name!
+For each batch, the `write_func` will be provided the type of register (`:holding_register` or
+`:coil`), the starting address for the batch to be written, and a list of values to write.
+It must return either `:ok` or `{:error, message}`.
 
-From here you can read and write by name.
+```elixir
+write_func = fn register_type, starting_address, value_or_values ->
+  result = custom_write_logic(…)
+  {:ok, result}
+end
+```
 
-Requesting a single value will return just one value:
+### 3. Read & Write by name!
+
+From here you can read and write by name…
+
+#### Requesting a single value returns just one value:
 ```elixir
 iex> ModBoss.read(MyDevice.Schema, read_func, :outdoor_temp)
 {:ok, 72}
 ```
 
-Requesting multiple values will return a map:
+#### Requesting multiple values returns a map:
 ```elixir
 iex> ModBoss.read(MyDevice.Schema, read_func, [:outdoor_temp, :model_name, :version])
 {:ok, %{outdoor_temp: 72, model_name: "AI4000", version: "0.1"}}
 ```
 
-Writing is always performed by providing a map:
+#### Writing is performed via a keyword list or map:
 ```elixir
-iex> ModBoss.write(MyDevice.Schema, write_func, %{version: "0.2"})
+iex> ModBoss.write(MyDevice.Schema, write_func, version: "0.2")
 :ok
 ```
+
+## Benefits
+
+Extracting your Modbus schema allows you to **isolate the encode/decode logic**
+making it much **more testable**. Your primary application logic becomes **simpler and more
+readable** since it references registers by name and doesn't need to worry about encoding/decoding
+of values. It also becomes fairly straightforward to set up **virtual devices** with the exact
+same register mappings as your physical devices (e.g. using an Elixir Agent to hold the state of
+the registers in a map). And it makes for **easier troubleshooting** since you don't need to
+memorize (or look up) the register mappings when you're at an `iex` prompt.

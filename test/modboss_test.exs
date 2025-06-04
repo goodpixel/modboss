@@ -1,6 +1,5 @@
 defmodule ModBossTest do
   use ExUnit.Case
-  doctest ModBoss
 
   defmodule FakeSchema do
     use ModBoss.Schema
@@ -331,10 +330,43 @@ defmodule ModBossTest do
       assert {:ok, %{yep: true, nope: false, text: "Oh wow"}} =
                ModBoss.read(schema, read_func(device), [:yep, :nope, :text])
     end
-  end
 
-  describe "ModBoss.read_all/2" do
-    test "fetches *all* registers if told to read `:all`" do
+    test "allows reading of 'raw' values" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        modbus_schema do
+          holding_register 1, :yep, as: :boolean
+          holding_register 2, :nope, as: :boolean
+          holding_register 3..5, :text, as: {ModBoss.Encoding, :ascii}
+        end
+
+        def decode_boolean(0), do: {:ok, false}
+        def decode_boolean(1), do: {:ok, true}
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_registers(device, %{
+        1 => 1,
+        2 => 0,
+        3 => 18533,
+        4 => 27756,
+        5 => 28416
+      })
+
+      assert {:ok, %{yep: true, nope: false, text: "Hello"}} =
+               ModBoss.read(schema, read_func(device), [:yep, :nope, :text])
+
+      assert {:ok, %{yep: 1, nope: 0, text: [18533, 27756, 28416]}} =
+               ModBoss.read(schema, read_func(device), [:yep, :nope, :text], decode: false)
+    end
+
+    test "fetches all readable registers if told to read the magic mapping `:all`" do
       schema = unique_module()
 
       Code.compile_string("""
@@ -360,12 +392,49 @@ defmodule ModBossTest do
         500 => 1
       })
 
-      assert {:ok, result} = ModBoss.read_all(schema, read_func(device))
+      assert {:ok, result} = ModBoss.read(schema, read_func(device), :all)
 
       assert %{
                foo: [10, 20],
                bar: 30,
                baz: 0,
+               qux: 1
+             } == result
+    end
+  end
+
+  describe "ModBoss.read_all/2" do
+    test "fetches all readable registers" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        modbus_schema do
+          holding_register 1..2, :foo
+          input_register 300, :bar
+          coil 400, :baz, mode: :w
+          discrete_input 500, :qux
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_registers(device, %{
+        1 => 10,
+        2 => 20,
+        300 => 30,
+        400 => 0,
+        500 => 1
+      })
+
+      assert {:ok, result} = ModBoss.read_all(schema, read_func(device))
+
+      assert %{
+               foo: [10, 20],
+               bar: 30,
                qux: 1
              } == result
     end
