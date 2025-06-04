@@ -3,6 +3,7 @@ defmodule ModBoss.EncodingTest do
   doctest ModBoss.Encoding, import: true
 
   alias ModBoss.Encoding
+  alias ModBoss.Mapping
 
   describe "raw" do
     test "doesn't change the value when encoding" do
@@ -74,20 +75,20 @@ defmodule ModBoss.EncodingTest do
 
   describe "ascii" do
     test "encodes ASCII text to the expected number of register values" do
-      assert {:ok, [0, 0, 0]} == Encoding.encode_ascii("", %{register_count: 3})
-      assert {:ok, [0x4100]} == Encoding.encode_ascii("A", %{register_count: 1})
-      assert {:ok, [0x4142]} == Encoding.encode_ascii("AB", %{register_count: 1})
-      assert {:ok, [0x4142, 0x4300]} == Encoding.encode_ascii("ABC", %{register_count: 2})
+      assert {:ok, [0, 0, 0]} == Encoding.encode_ascii("", %Mapping{register_count: 3})
+      assert {:ok, [0x4100]} == Encoding.encode_ascii("A", %Mapping{register_count: 1})
+      assert {:ok, [0x4142]} == Encoding.encode_ascii("AB", %Mapping{register_count: 1})
+      assert {:ok, [0x4142, 0x4300]} == Encoding.encode_ascii("ABC", %Mapping{register_count: 2})
     end
 
     test "returns an error when attempting to encode more characters than what the mapped registers can hold" do
-      mapping = %{name: :my_mapping, register_count: 2}
+      mapping = %Mapping{name: :my_mapping, register_count: 2}
       assert {:error, message} = Encoding.encode_ascii("ABCDE", mapping)
       assert String.match?(message, ~r/too many characters/)
     end
 
     test "returns an error when attempting to encode non-ASCII text" do
-      assert {:error, message} = Encoding.encode_ascii("José", %{register_count: 2})
+      assert {:error, message} = Encoding.encode_ascii("José", %Mapping{register_count: 2})
       assert String.match?(message, ~r/non-ASCII/i)
     end
 
@@ -104,7 +105,7 @@ defmodule ModBoss.EncodingTest do
     test "roundtrips as expected" do
       [{"", 1}, {"A", 1}, {"AB", 2}, {"ABC", 2}, {"ABCD", 2}, {"A", 4}]
       |> Enum.each(fn {text, count} ->
-        {:ok, encoded} = Encoding.encode_ascii(text, %{name: :foo, register_count: count})
+        {:ok, encoded} = Encoding.encode_ascii(text, %Mapping{name: :foo, register_count: count})
         {:ok, decoded} = Encoding.decode_ascii(encoded)
         assert text == decoded
       end)

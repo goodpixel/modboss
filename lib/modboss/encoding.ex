@@ -23,6 +23,7 @@ defmodule ModBoss.Encoding do
   when providing your own `encode_*` functions, you'll only accept the value to be encoded
   (and not the mapping).
   """
+  alias ModBoss.Mapping
 
   import Bitwise
 
@@ -117,13 +118,13 @@ defmodule ModBoss.Encoding do
 
   ## Examples
 
-      iex> encode_ascii("Hi!", %{register_count: 3})
+      iex> encode_ascii("Hi!", %ModBoss.Mapping{register_count: 3})
       {:ok, [18537, 8448, 0]}
 
-      iex> {:error, _too_many_characters} = encode_ascii("Hi!", %{register_count: 1})
+      iex> {:error, _too_many_characters} = encode_ascii("Hi!", %ModBoss.Mapping{register_count: 1})
   """
-  @spec encode_ascii(binary(), map()) :: {:ok, list(integer())} | {:error, binary()}
-  def encode_ascii(text, mapping) do
+  @spec encode_ascii(binary(), Mapping.t()) :: {:ok, list(integer())} | {:error, binary()}
+  def encode_ascii(text, %Mapping{} = mapping) do
     with :ok <- verify_ascii(text),
          {:ok, chars} <- get_chars(text),
          {:ok, padded_chars} <- pad(chars, mapping) do
@@ -158,7 +159,7 @@ defmodule ModBoss.Encoding do
 
     if pad_count < 0 do
       message = """
-      Text for #{inspect(mapping[:name])} contains too many characters. \
+      Text for #{inspect(mapping.name)} contains too many characters. \
       With #{mapping.register_count} registers, it can hold up to #{max_chars} ASCII characters.\
       """
 
