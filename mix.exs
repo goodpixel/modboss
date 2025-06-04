@@ -11,8 +11,10 @@ defmodule ModBoss.MixProject do
         check_plt: true
       ],
       start_permanent: Mix.env() == :prod,
+      description: description(),
       deps: deps(),
-      docs: docs()
+      docs: docs(),
+      package: package()
     ]
   end
 
@@ -34,12 +36,23 @@ defmodule ModBoss.MixProject do
     ]
   end
 
+  defp description do
+    "Modbus schema mapping with automatic encoding/decoding."
+  end
+
   defp docs do
     [
       main: "readme",
       logo: "assets/boss-t.png",
       extras: ["README.md": [title: "Overview"]],
       assets: %{"assets" => "assets"}
+    ]
+  end
+
+  def package do
+    [
+      licenses: ["MIT"],
+      links: %{"GitHub" => "https://github.com/goodpixel/modboss"}
     ]
   end
 end
