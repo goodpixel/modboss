@@ -5,6 +5,66 @@ defmodule ModBoss.Schema do
   The schema allows names to be assigned to individual registers or groups of contiguous
   registers along with encoder/decoder functions. It also allows registers to be flagged
   as readable and/or writable.
+
+  ## Naming an address
+
+  You'll name a Modbus address with this format:
+
+      holding_register 17, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
+
+  This establishes address 17 as a holding register with the name `:outdoor_temp`.
+  The raw value from the register will be passed to `ModBoss.Encoding.decode_signed_int/1`
+  before being returned.
+
+  Similarly, to set aside a **group of** registers to hold a single logical value,
+  it would look like:
+
+      holding_register 20..23, :model_name, as: {ModBoss.Encoding, :ascii}
+
+  This establishes addresses 20–23 as holding registers with the name `:model_name`. The raw
+  values from these registers will be passed (as a list) to `ModBoss.Encoding.decode_ascii/1`
+  before being returned.
+
+  ## Mode
+
+  All registers are read-only by default. Use `mode: :rw` to allow both reads & writes.
+  Or use `mode: :w` to mark a register as write-only.
+
+  ## Automatic encoding/decoding
+
+  Depending on whether a mapping is flagged as readable/writable, it is expected that you
+  will provide functions with `encode_` or `decode_` prepended to the value provided by the `:as`
+  option.
+
+  For example, if you specify `as: :on_off` for a read-only register, ModBoss will expect that
+  the schema module defines an `encode_on_off/1` function that accepts the value to encode and
+  returns either `{:ok, encoded_value}` or `{:error, messsage}`.
+
+  If the function to be used lives outside of the current module, a tuple including the module
+  name can be passed. For example, you can use built-in translation from `ModBoss.Encoding` such
+  as `:boolean`, `:signed_int`, `:unsigned_int`, and `:ascii`.
+
+  ## Example
+
+      defmodule MyDevice.Schema do
+        use ModBoss.Schema
+
+        modbus_schema do
+          holding_register 1..5, :model, as: {ModBoss.Encoding, :ascii}
+          holding_register 6, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
+          holding_register 7, :indoor_temp, as: {ModBoss.Encoding, :unsigned_int}
+
+          input_register 200, :foo, as: {ModBoss.Encoding, :unsigned_int}
+          coil 300, :bar, as: :on_off, mode: :rw
+          discrete_input 400, :baz, as: {ModBoss.Encoding, :boolean}
+        end
+
+        def encode_on_off(:on), do: {:ok, 1}
+        def encode_on_off(:off), do: {:ok, 0}
+
+        def decode_on_off(1), do: {:ok, :on}
+        def decode_on_off(0), do: {:ok, :off}
+      end
   """
 
   alias ModBoss.Mapping
@@ -53,7 +113,7 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
-    See explanation of [automatic encoding/decoding](ModBoss.Encoding.html#module-automatic-encoding-decoding).
+    See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
   """
   defmacro holding_register(addresses, name, opts \\ []) do
     module = __CALLER__.module
@@ -68,7 +128,7 @@ defmodule ModBoss.Schema do
 
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
-    See explanation of [automatic encoding/decoding](ModBoss.Encoding.html#module-automatic-encoding-decoding).
+    See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
   """
   defmacro input_register(addresses, name, opts \\ []) do
     module = __CALLER__.module
@@ -84,7 +144,7 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
-    See explanation of [automatic encoding/decoding](ModBoss.Encoding.html#module-automatic-encoding-decoding).
+    See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
   """
   defmacro coil(addresses, name, opts \\ []) do
     module = __CALLER__.module
@@ -99,7 +159,7 @@ defmodule ModBoss.Schema do
 
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
-    See explanation of [automatic encoding/decoding](ModBoss.Encoding.html#module-automatic-encoding-decoding).
+    See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
   """
   defmacro discrete_input(addresses, name, opts \\ []) do
     module = __CALLER__.module

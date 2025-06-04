@@ -15,7 +15,6 @@ defmodule ModBoss.Mapping do
           mode: :r | :rw | :w
         }
 
-  @enforce_keys [:name, :type, :addresses, :starting_address, :register_count]
   defstruct name: nil,
             type: nil,
             addresses: nil,

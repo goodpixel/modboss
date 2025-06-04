@@ -2,27 +2,22 @@ defmodule ModBoss.Encoding do
   @moduledoc """
   Built-in encoding/decoding functions to get you started.
 
-  ## Automatic encoding/decoding
+  To make use of these functions, use the `:as` option in your `ModBoss.Schema` but leave off
+  the `encode_` or `decode_` prefix.
 
-  Depending on whether a mapping is flagged as readable/writable, it is expected that you
-  will provide functions with `encode_` or `decode_` prepended to the value provided by the `:as`
-  option.
+  In other words, to use the built-in ASCII translation, specifiy `as: :ascii` in your schema.
 
-  For example, if you specify `as: :my_type` for a read-only register, ModBoss will expect that
-  the schema module defines an `encode_my_type/1` function that accepts the value to encode and
-  returns either `{:ok, encoded_value}` or `{:error, messsage}`.
-
-  If the function to be used lives outside of the current module, a tuple including the module
-  name can be passed. For example, you can use the built-in ASCII decoder from ModBoss via
-
-  ### Built-in encoders
+  ### Note about that extra arg…
 
   Note that for built-in `encode_*` functions, we pass not just the value but also the mapping
-  itself. We do this in order to provide more generic and helpful functions out the box (like
+  itself. That's why you'll see an extra argument passed to these encoders!
+
+  We do this in order to provide more generic and helpful functions out the box (like
   encoding of ASCII, which requires knowledge of how many registers we're encoding for). However,
-  when providing your own `encode_*` functions, you'll only accept the value to be encoded
+  when providing your own `encode_*` functions, you'll only be passed the value to be encoded
   (and not the mapping).
   """
+  alias ModBoss.Mapping
 
   import Bitwise
 
@@ -31,6 +26,20 @@ defmodule ModBoss.Encoding do
 
   @doc false
   def decode_raw(value_or_values), do: {:ok, value_or_values}
+
+  @doc """
+  Encode `true` as `1` and `false` as `0`
+  """
+  @spec encode_boolean(boolean(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
+  def encode_boolean(true, _mapping), do: {:ok, 1}
+  def encode_boolean(false, _mapping), do: {:ok, 0}
+
+  @doc """
+  Interpret `1` as `true` and `0` as `false`
+  """
+  @spec decode_boolean(integer()) :: {:ok, boolean()} | {:error, binary()}
+  def decode_boolean(1), do: {:ok, true}
+  def decode_boolean(0), do: {:ok, false}
 
   @doc """
   Encode `value` as an unsigned integer.
@@ -45,12 +54,12 @@ defmodule ModBoss.Encoding do
       iex> {:ok, 65_535} = encode_unsigned_int(65_535, %{})
       iex> {:error, _too_large} = encode_unsigned_int(65_536, %{})
   """
-  @spec encode_unsigned_int(integer(), map()) :: {:ok, integer()} | {:error, binary()}
-  def encode_unsigned_int(value, _) when value >= 0 and value <= 65_535 do
+  @spec encode_unsigned_int(integer(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
+  def encode_unsigned_int(value, _mapping) when value >= 0 and value <= 65_535 do
     {:ok, value}
   end
 
-  def encode_unsigned_int(value, _) do
+  def encode_unsigned_int(value, _mapping) do
     {:error, "Value #{value} is outside the range of a 16-bit unsigned integer (0 to 65,535)"}
   end
 
@@ -81,12 +90,13 @@ defmodule ModBoss.Encoding do
       iex> {:ok, -32_768} = encode_signed_int(-32_768, %{})
       iex> {:error, _too_large} = encode_signed_int(32_768, %{})
   """
-  @spec encode_signed_int(integer(), map()) :: {:ok, integer()} | {:error, binary()}
-  def encode_signed_int(value, _) when is_integer(value) and value >= -32768 and value <= 32767 do
+  @spec encode_signed_int(integer(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
+  def encode_signed_int(value, _mapping)
+      when is_integer(value) and value >= -32768 and value <= 32767 do
     {:ok, value}
   end
 
-  def encode_signed_int(value, _) do
+  def encode_signed_int(value, _mapping) do
     {:error, "Value #{value} is outside the range of a 16-bit signed integer (-32768 to 32767)"}
   end
 
@@ -117,13 +127,13 @@ defmodule ModBoss.Encoding do
 
   ## Examples
 
-      iex> encode_ascii("Hi!", %{register_count: 3})
+      iex> encode_ascii("Hi!", %ModBoss.Mapping{register_count: 3})
       {:ok, [18537, 8448, 0]}
 
-      iex> {:error, _too_many_characters} = encode_ascii("Hi!", %{register_count: 1})
+      iex> {:error, _too_many_characters} = encode_ascii("Hi!", %ModBoss.Mapping{register_count: 1})
   """
-  @spec encode_ascii(binary(), map()) :: {:ok, list(integer())} | {:error, binary()}
-  def encode_ascii(text, mapping) do
+  @spec encode_ascii(binary(), Mapping.t()) :: {:ok, list(integer())} | {:error, binary()}
+  def encode_ascii(text, %Mapping{} = mapping) do
     with :ok <- verify_ascii(text),
          {:ok, chars} <- get_chars(text),
          {:ok, padded_chars} <- pad(chars, mapping) do
@@ -158,7 +168,7 @@ defmodule ModBoss.Encoding do
 
     if pad_count < 0 do
       message = """
-      Text for #{inspect(mapping[:name])} contains too many characters. \
+      Text for #{inspect(mapping.name)} contains too many characters. \
       With #{mapping.register_count} registers, it can hold up to #{max_chars} ASCII characters.\
       """
 
