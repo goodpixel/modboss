@@ -2,6 +2,8 @@
 
 <img alt="ModBoss logo" width="500px" src="assets/boss.jpeg">
 
+[![Elixir CI](https://github.com/goodpixel/modboss/actions/workflows/elixir.yml/badge.svg?branch=main)](https://github.com/goodpixel/modboss/actions/workflows/elixir.yml)
+
 ## Show that Bus who's Boss!
 
 ModBoss is an Elixir library that maps Modbus registers to human-friendly names and provides
