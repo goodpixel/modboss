@@ -7,9 +7,9 @@ defmodule ModBoss.EncodingTest do
 
   describe "raw" do
     test "doesn't change the value when encoding" do
-      assert Encoding.encode_raw(123, %{}) == {:ok, 123}
-      assert Encoding.encode_raw(:abc, %{}) == {:ok, :abc}
-      assert Encoding.encode_raw([1, 2, 3], %{}) == {:ok, [1, 2, 3]}
+      assert Encoding.encode_raw(123, %Mapping{}) == {:ok, 123}
+      assert Encoding.encode_raw(:abc, %Mapping{}) == {:ok, :abc}
+      assert Encoding.encode_raw([1, 2, 3], %Mapping{}) == {:ok, [1, 2, 3]}
     end
 
     test "doesn't change the value when decoding" do
@@ -19,16 +19,28 @@ defmodule ModBoss.EncodingTest do
     end
   end
 
+  describe "boolean" do
+    test "encodes true and 1 and false as 0" do
+      assert Encoding.encode_boolean(true, %Mapping{}) == {:ok, 1}
+      assert Encoding.encode_boolean(false, %Mapping{}) == {:ok, 0}
+    end
+
+    test "decodes 1 as true and 0 as false" do
+      assert Encoding.decode_boolean(1) == {:ok, true}
+      assert Encoding.decode_boolean(0) == {:ok, false}
+    end
+  end
+
   describe "unsigned_int" do
     test "returns the value if within the range for 16 bits when encoding" do
-      assert Encoding.encode_unsigned_int(0, %{}) == {:ok, 0}
-      assert Encoding.encode_unsigned_int(65535, %{}) == {:ok, 65535}
+      assert Encoding.encode_unsigned_int(0, %Mapping{}) == {:ok, 0}
+      assert Encoding.encode_unsigned_int(65535, %Mapping{}) == {:ok, 65535}
     end
 
     test "returns an error for out-of-range values when encoding" do
-      assert {:error, _} = Encoding.encode_unsigned_int(-1, %{})
-      assert {:error, _} = Encoding.encode_unsigned_int(65536, %{})
-      assert {:error, _} = Encoding.encode_unsigned_int(:foo, %{})
+      assert {:error, _} = Encoding.encode_unsigned_int(-1, %Mapping{})
+      assert {:error, _} = Encoding.encode_unsigned_int(65536, %Mapping{})
+      assert {:error, _} = Encoding.encode_unsigned_int(:foo, %Mapping{})
     end
 
     test "returns the value when decoding" do
@@ -39,7 +51,7 @@ defmodule ModBoss.EncodingTest do
     test "roundtrips as expected" do
       [0, 65535]
       |> Enum.each(fn number ->
-        {:ok, encoded} = Encoding.encode_unsigned_int(number, %{})
+        {:ok, encoded} = Encoding.encode_unsigned_int(number, %Mapping{})
         {:ok, decoded} = Encoding.decode_unsigned_int(encoded)
         assert number == decoded
       end)
@@ -48,13 +60,13 @@ defmodule ModBoss.EncodingTest do
 
   describe "signed_int" do
     test "returns the value if within the range for 16 bits when encoding" do
-      assert {:ok, -32768} = Encoding.encode_signed_int(-32768, %{})
-      assert {:ok, 32767} = Encoding.encode_signed_int(32767, %{})
+      assert {:ok, -32768} = Encoding.encode_signed_int(-32768, %Mapping{})
+      assert {:ok, 32767} = Encoding.encode_signed_int(32767, %Mapping{})
     end
 
     test "returns error for out-of-range signed integers when encoding" do
-      assert {:error, _} = Encoding.encode_signed_int(-32769, %{})
-      assert {:error, _} = Encoding.encode_signed_int(32768, %{})
+      assert {:error, _} = Encoding.encode_signed_int(-32769, %Mapping{})
+      assert {:error, _} = Encoding.encode_signed_int(32768, %Mapping{})
     end
 
     test "interprets the value as a signed int when decoding" do
@@ -66,7 +78,7 @@ defmodule ModBoss.EncodingTest do
     test "roundtrips as expected" do
       [-32768, 0, 32767]
       |> Enum.each(fn initial ->
-        {:ok, encoded} = Encoding.encode_signed_int(initial, %{})
+        {:ok, encoded} = Encoding.encode_signed_int(initial, %Mapping{})
         {:ok, decoded} = Encoding.decode_signed_int(encoded)
         assert initial == decoded
       end)

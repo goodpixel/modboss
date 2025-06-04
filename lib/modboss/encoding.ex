@@ -28,6 +28,20 @@ defmodule ModBoss.Encoding do
   def decode_raw(value_or_values), do: {:ok, value_or_values}
 
   @doc """
+  Encode `true` as `1` and `false` as `0`
+  """
+  @spec encode_boolean(boolean(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
+  def encode_boolean(true, _mapping), do: {:ok, 1}
+  def encode_boolean(false, _mapping), do: {:ok, 0}
+
+  @doc """
+  Interpret `1` as `true` and `0` as `false`
+  """
+  @spec decode_boolean(integer()) :: {:ok, boolean()} | {:error, binary()}
+  def decode_boolean(1), do: {:ok, true}
+  def decode_boolean(0), do: {:ok, false}
+
+  @doc """
   Encode `value` as an unsigned integer.
 
   Valid values are 0 to 65,535.
@@ -40,12 +54,12 @@ defmodule ModBoss.Encoding do
       iex> {:ok, 65_535} = encode_unsigned_int(65_535, %{})
       iex> {:error, _too_large} = encode_unsigned_int(65_536, %{})
   """
-  @spec encode_unsigned_int(integer(), map()) :: {:ok, integer()} | {:error, binary()}
-  def encode_unsigned_int(value, _) when value >= 0 and value <= 65_535 do
+  @spec encode_unsigned_int(integer(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
+  def encode_unsigned_int(value, _mapping) when value >= 0 and value <= 65_535 do
     {:ok, value}
   end
 
-  def encode_unsigned_int(value, _) do
+  def encode_unsigned_int(value, _mapping) do
     {:error, "Value #{value} is outside the range of a 16-bit unsigned integer (0 to 65,535)"}
   end
 
@@ -76,12 +90,13 @@ defmodule ModBoss.Encoding do
       iex> {:ok, -32_768} = encode_signed_int(-32_768, %{})
       iex> {:error, _too_large} = encode_signed_int(32_768, %{})
   """
-  @spec encode_signed_int(integer(), map()) :: {:ok, integer()} | {:error, binary()}
-  def encode_signed_int(value, _) when is_integer(value) and value >= -32768 and value <= 32767 do
+  @spec encode_signed_int(integer(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
+  def encode_signed_int(value, _mapping)
+      when is_integer(value) and value >= -32768 and value <= 32767 do
     {:ok, value}
   end
 
-  def encode_signed_int(value, _) do
+  def encode_signed_int(value, _mapping) do
     {:error, "Value #{value} is outside the range of a 16-bit signed integer (-32768 to 32767)"}
   end
 
