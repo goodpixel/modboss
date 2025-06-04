@@ -44,6 +44,26 @@ defmodule ModBoss.Schema do
   name can be passed. For example, you can use built-in translation from `ModBoss.Encoding` such
   as `:boolean`, `:signed_int`, `:unsigned_int`, and `:ascii`.
 
+  > #### output of `encode_*` {: .info}
+  >
+  > Your encode function may need to encode for **one or multiple** registers, depending on the
+  > mapping. You are free to return either a single value or a list of values—the important thing
+  > is that the number of values returned needs to match the number of registers for your mapping.
+  > If it doesn't, ModBoss will detect that and return an error during encoding.
+  >
+  > For example, if encoding "ABC!" as ascii into a mapping with 3 registers, this would
+  > technically only "require" 2 registers (one 16-bit register for every 2 characters).
+  > However, your encoding should return a list of 3 values if that's what you've assigned
+  > to the mapping in your schema.
+
+  > #### input to `decode_*` {: .info}
+  >
+  > When decoding a single register, the decode function will be passed the single value from that
+  > register as provided by your read function.
+  >
+  > When decoding multiple registers (e.g. in `ModBoss.Encoding.decode_ascii/1`), the decode
+  > function will be passed a **List** of values.
+
   ## Example
 
       defmodule MyDevice.Schema do
