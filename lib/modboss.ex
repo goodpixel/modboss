@@ -15,9 +15,7 @@ defmodule ModBoss do
                          :ok | {:error, any()})
   @type values_to_write :: [{atom(), any()}] | %{atom() => any()}
 
-  @doc """
-  Read *all* readable modbus registers from the schema.
-  """
+  @doc false
   def read_all(module, read_func, opts \\ []) do
     readable_mappings =
       module.__modbus_schema__()
