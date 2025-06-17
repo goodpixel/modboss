@@ -5,7 +5,7 @@ defmodule ModBoss.Encoding do
   To make use of these functions, use the `:as` option in your `ModBoss.Schema` but leave off
   the `encode_` or `decode_` prefix.
 
-  In other words, to use the built-in ASCII translation, specifiy `as: :ascii` in your schema.
+  For example, to use the built-in ASCII translation, specify `as: :ascii` in your schema.
 
   ### Note about that extra arg…
 
