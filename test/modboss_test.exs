@@ -440,7 +440,7 @@ defmodule ModBossTest do
     end
   end
 
-  describe "ModBoss.write/4" do
+  describe "ModBoss.write/3" do
     test "writes registers referenced by human-readable names from map" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       :ok = ModBoss.write(FakeSchema, write_func(device), %{baz: 1, corge: 1234})
