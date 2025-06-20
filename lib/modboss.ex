@@ -7,13 +7,13 @@ defmodule ModBoss do
 
   alias ModBoss.Mapping
 
-  @typep mode :: :readable | :writable
+  @typep mode :: :readable | :writable | :any
   @type register_type :: :holding_register | :input_register | :coil | :discrete_input
   @type read_func :: (register_type(), starting_address :: integer(), count :: integer() ->
                         {:ok, any()} | {:error, any()})
   @type write_func :: (register_type(), starting_address :: integer(), value_or_values :: any() ->
                          :ok | {:error, any()})
-  @type values_to_write :: [{atom(), any()}] | %{atom() => any()}
+  @type values :: [{atom(), any()}] | %{atom() => any()}
 
   @doc false
   def read_all(module, read_func, opts \\ []) do
@@ -103,6 +103,41 @@ defmodule ModBoss do
   end
 
   @doc """
+  Encode values per the mapping without actually writing them.
+
+  This can be useful in test scenarios and enables values to be encoded in bulk without actually
+  being written via Modbus.
+
+  Returns a map with keys of the form `{type, address}` and `encoded_value` as values.
+
+  ## Example
+
+      iex> ModBoss.encode(MyDevice.Schema, foo: "Yay")
+      {:ok, %{{:holding_register, 15} => 22881, {:holding_register, 16} => 30976}}
+  """
+  @spec encode(module(), values()) :: {:ok, map()} | {:error, any()}
+  def encode(module, values) when is_atom(module) do
+    with {:ok, mappings} <- get_mappings(:any, module, get_keys(values)),
+         mappings <- put_values(mappings, values),
+         {:ok, mappings} <- encode(mappings) do
+      {:ok, flatten_encoded_values(mappings)}
+    end
+  end
+
+  defp flatten_encoded_values(mappings) do
+    mappings
+    |> Enum.flat_map(fn %Mapping{} = mapping ->
+      mapping.encoded_value
+      |> List.wrap()
+      |> Enum.with_index(mapping.starting_address)
+      |> Enum.map(fn {value_for_register, address} ->
+        {{mapping.type, address}, value_for_register}
+      end)
+    end)
+    |> Enum.into(%{})
+  end
+
+  @doc """
   Write to modbus using named mappings.
 
   ModBoss automatically encodes your `values`, then batches any encoded values destined for
@@ -136,7 +171,7 @@ defmodule ModBoss do
       iex> ModBoss.write(MyDevice.Schema, write_func, foo: 75, bar: "ABC")
       :ok
   """
-  @spec write(module(), write_func(), values_to_write()) :: :ok | {:error, any()}
+  @spec write(module(), write_func(), values()) :: :ok | {:error, any()}
   def write(module, write_func, values) when is_atom(module) and is_function(write_func) do
     with {:ok, mappings} <- get_mappings(:writable, module, get_keys(values)),
          mappings <- put_values(mappings, values),
