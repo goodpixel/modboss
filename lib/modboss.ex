@@ -210,7 +210,7 @@ defmodule ModBoss do
     cond do
       Enum.any?(unknown_names) ->
         names = unknown_names |> Enum.map_join(", ", fn name -> inspect(name) end)
-        {:error, "Unknown register(s) #{names} for #{inspect(module)}."}
+        {:error, "Unknown mapping(s) #{names} for #{inspect(module)}."}
 
       mode == :readable and Enum.any?(unreadable(mappings)) ->
         names = unreadable(mappings) |> Enum.map_join(", ", fn %{name: name} -> inspect(name) end)

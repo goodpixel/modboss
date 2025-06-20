@@ -64,7 +64,7 @@ defmodule ModBossTest do
     test "returns an error if any mapping names are unrecognized" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
-      assert {:error, "Unknown register(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
+      assert {:error, "Unknown mapping(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
                ModBoss.read(FakeSchema, read_func(device), [:foobar, :bazqux])
     end
 
@@ -456,7 +456,7 @@ defmodule ModBossTest do
     test "returns an error if any mapping names are unrecognized" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
-      assert {:error, "Unknown register(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
+      assert {:error, "Unknown mapping(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
                ModBoss.write(FakeSchema, write_func(device), %{foobar: 1, bazqux: 2})
     end
 
@@ -725,7 +725,7 @@ defmodule ModBossTest do
       """)
 
       assert {:error, message} = ModBoss.encode(schema, %{foo: 1, bar: 2, baz: 3})
-      assert String.match?(message, ~r/Unknown register/i)
+      assert String.match?(message, ~r/Unknown mapping/i)
 
       assert {:ok, _encoded_values} = ModBoss.encode(schema, %{foo: 1, bar: 2})
     end
