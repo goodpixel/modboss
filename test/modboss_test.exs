@@ -64,7 +64,7 @@ defmodule ModBossTest do
     test "returns an error if any mapping names are unrecognized" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
-      assert {:error, "Unknown register(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
+      assert {:error, "Unknown mapping(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
                ModBoss.read(FakeSchema, read_func(device), [:foobar, :bazqux])
     end
 
@@ -440,7 +440,7 @@ defmodule ModBossTest do
     end
   end
 
-  describe "ModBoss.write/4" do
+  describe "ModBoss.write/3" do
     test "writes registers referenced by human-readable names from map" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       :ok = ModBoss.write(FakeSchema, write_func(device), %{baz: 1, corge: 1234})
@@ -456,7 +456,7 @@ defmodule ModBossTest do
     test "returns an error if any mapping names are unrecognized" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
-      assert {:error, "Unknown register(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
+      assert {:error, "Unknown mapping(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
                ModBoss.write(FakeSchema, write_func(device), %{foobar: 1, bazqux: 2})
     end
 
@@ -628,6 +628,106 @@ defmodule ModBossTest do
                })
 
       assert 3 = get_write_count(device)
+    end
+  end
+
+  describe "ModBoss.encode/2" do
+    test "translates values from a Keyword List per the schema" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+        alias ModBoss.Encoding
+
+        modbus_schema do
+          holding_register 1, :foo, as: {Encoding, :boolean}
+          holding_register 2, :bar, as: {Encoding, :boolean}
+          holding_register 3..4, :baz, as: {Encoding, :ascii}
+          input_register 100, :qux
+          coil 101, :quux
+          discrete_input 102, :corge
+        end
+      end
+      """)
+
+      assert {:ok,
+              %{
+                {:holding_register, 1} => 1,
+                {:holding_register, 2} => 0,
+                {:holding_register, 3} => 22383,
+                {:holding_register, 4} => 30497,
+                {:input_register, 100} => 3,
+                {:coil, 101} => 2,
+                {:discrete_input, 102} => 1
+              }} =
+               ModBoss.encode(schema,
+                 foo: true,
+                 bar: false,
+                 baz: "Wow!",
+                 qux: 3,
+                 quux: 2,
+                 corge: 1
+               )
+    end
+
+    test "translates values from a map per the schema" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+        alias ModBoss.Encoding
+
+        modbus_schema do
+          holding_register 1, :foo, as: {Encoding, :boolean}
+          holding_register 2, :bar, as: {Encoding, :boolean}
+          holding_register 3..4, :baz, as: {Encoding, :ascii}
+          input_register 100, :qux
+          coil 101, :quux
+          discrete_input 102, :corge
+        end
+      end
+      """)
+
+      assert {:ok,
+              %{
+                {:holding_register, 1} => 1,
+                {:holding_register, 2} => 0,
+                {:holding_register, 3} => 22383,
+                {:holding_register, 4} => 30497,
+                {:input_register, 100} => 3,
+                {:coil, 101} => 2,
+                {:discrete_input, 102} => 1
+              }} =
+               ModBoss.encode(schema, %{
+                 foo: true,
+                 bar: false,
+                 baz: "Wow!",
+                 qux: 3,
+                 quux: 2,
+                 corge: 1
+               })
+    end
+
+    test "returns an error if any registers are unrecognized" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        modbus_schema do
+          holding_register 1, :foo
+          holding_register 2, :bar
+        end
+      end
+      """)
+
+      assert {:error, message} = ModBoss.encode(schema, %{foo: 1, bar: 2, baz: 3})
+      assert String.match?(message, ~r/Unknown mapping/i)
+
+      assert {:ok, _encoded_values} = ModBoss.encode(schema, %{foo: 1, bar: 2})
     end
   end
 

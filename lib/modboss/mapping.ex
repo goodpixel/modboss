@@ -11,7 +11,7 @@ defmodule ModBoss.Mapping do
           register_count: integer(),
           as: atom() | {module(), atom()},
           value: any(),
-          encoded_value: integer(),
+          encoded_value: integer() | [integer()],
           mode: :r | :rw | :w
         }
 
