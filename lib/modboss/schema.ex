@@ -232,17 +232,25 @@ defmodule ModBoss.Schema do
 
     duplicate_addresses =
       mappings
-      |> Enum.flat_map(&Enum.to_list(&1.addresses))
+      |> Enum.flat_map(fn mapping ->
+        mapping.addresses
+        |> Enum.to_list()
+        |> Enum.map(&{mapping.type, &1})
+      end)
       |> Enum.frequencies()
       |> Enum.filter(fn {_address, count} -> count > 1 end)
       |> Enum.map(fn {address, _count} -> address end)
+      |> Enum.reverse()
 
     if Enum.any?(duplicate_addresses) do
       raise CompileError,
         file: env.file,
         line: env.line,
-        description:
-          "The following addresses were mapped more than once in #{env.module}: #{Enum.join(duplicate_addresses, ", ")}."
+        description: """
+        Each address can only be registered once per object type, but the following were mapped more than once in #{env.module}:
+
+        #{Enum.map_join(duplicate_addresses, "\n", fn dup -> "  * #{inspect(dup)}" end)}
+        """
     end
 
     mappings =
