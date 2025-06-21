@@ -50,15 +50,36 @@ defmodule ModBoss.SchemaTest do
       end
     end
 
-    test "raises an exception if any addresses are mapped twice" do
-      assert_raise CompileError, ~r/addresses were mapped more than once in/, fn ->
+    test "allows addresses to be reused across object types" do
+      # This shouldn't raise an exception, so the test should pass…
+      Code.compile_string("""
+      defmodule #{unique_module()} do
+        use ModBoss.Schema
+
+        modbus_schema do
+          holding_register 1, :foo
+          input_register 1, :bar
+          coil 1, :baz
+          discrete_input 1, :qux
+        end
+      end
+      """)
+    end
+
+    test "raises an exception if any addresses are mapped more than once for any given object" do
+      message = ~r/mapped more than once.*{:holding_register, 1}.*{:coil, 2}/s
+
+      assert_raise CompileError, message, fn ->
         Code.compile_string("""
         defmodule #{unique_module()} do
           use ModBoss.Schema
 
           modbus_schema do
-            holding_register 1, :foo
-            holding_register 1, :bar
+            holding_register 1, :nope
+            holding_register 1, :nah
+            coil 1, :okay
+            coil 2, :uh_oh
+            coil 2, :yeah_no
           end
         end
         """)
