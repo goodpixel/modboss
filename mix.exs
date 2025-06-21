@@ -1,10 +1,13 @@
 defmodule ModBoss.MixProject do
   use Mix.Project
 
+  @source_url "https://github.com/goodpixel/modboss"
+  @version "0.1.0"
+
   def project do
     [
       app: :modboss,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.16",
       dialyzer: [
         plt_add_apps: [:mix, :ex_unit],
@@ -45,7 +48,9 @@ defmodule ModBoss.MixProject do
       main: "readme",
       logo: "assets/boss-t.png",
       extras: ["README.md": [title: "Overview"]],
-      assets: %{"assets" => "assets"}
+      assets: %{"assets" => "assets"},
+      source_url: @source_url,
+      source_ref: "v#{@version}"
     ]
   end
 
