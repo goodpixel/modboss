@@ -136,6 +136,7 @@ defmodule ModBoss.Schema do
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
   """
   defmacro holding_register(addresses, name, opts \\ []) do
+    ModBoss.Schema.validate_name!(__CALLER__, name)
     module = __CALLER__.module
 
     quote bind_quoted: binding() do
@@ -151,6 +152,7 @@ defmodule ModBoss.Schema do
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
   """
   defmacro input_register(addresses, name, opts \\ []) do
+    ModBoss.Schema.validate_name!(__CALLER__, name)
     module = __CALLER__.module
 
     quote bind_quoted: binding() do
@@ -167,6 +169,7 @@ defmodule ModBoss.Schema do
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
   """
   defmacro coil(addresses, name, opts \\ []) do
+    ModBoss.Schema.validate_name!(__CALLER__, name)
     module = __CALLER__.module
 
     quote bind_quoted: binding() do
@@ -182,6 +185,7 @@ defmodule ModBoss.Schema do
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
   """
   defmacro discrete_input(addresses, name, opts \\ []) do
+    ModBoss.Schema.validate_name!(__CALLER__, name)
     module = __CALLER__.module
 
     quote bind_quoted: binding() do
@@ -189,7 +193,15 @@ defmodule ModBoss.Schema do
     end
   end
 
-  @doc false
+  def validate_name!(%Macro.Env{file: file, line: line}, :all) do
+    raise CompileError,
+      file: file,
+      line: line,
+      description: "The name `:all` is reserved by ModBoss and cannot be used for a mapping."
+  end
+
+  def validate_name!(_env, _name), do: :ok
+
   def create_register_mapping(module, register_type, address_or_range, name, opts) do
     if not Module.has_attribute?(module, :register_mappings) do
       raise """
@@ -220,14 +232,14 @@ defmodule ModBoss.Schema do
       mappings
       |> Enum.frequencies_by(& &1.name)
       |> Enum.filter(fn {_mapping, count} -> count > 1 end)
-      |> Enum.map(fn {name, _count} -> name end)
+      |> Enum.map(fn {name, _count} -> inspect(name) end)
 
     if Enum.any?(duplicate_names) do
       raise CompileError,
         file: env.file,
         line: env.line,
         description:
-          "The following names were used to identify more than one register in #{env.module}: #{Enum.join(duplicate_names, ", ")}."
+          "The following names were used to identify more than one register: [#{Enum.join(duplicate_names, ", ")}]."
     end
 
     duplicate_addresses =
@@ -247,7 +259,7 @@ defmodule ModBoss.Schema do
         file: env.file,
         line: env.line,
         description: """
-        Each address can only be registered once per object type, but the following were mapped more than once in #{env.module}:
+        Each address can only be registered once per object type, but the following were mapped more than once:
 
         #{Enum.map_join(duplicate_addresses, "\n", fn dup -> "  * #{inspect(dup)}" end)}
         """

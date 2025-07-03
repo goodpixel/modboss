@@ -8,6 +8,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Add `ModBoss.encode/2` for encoding mappings to objects without actually writing via Modbus.
 
+### Changed
+
+- Don't allow `:all` as an object name in a schema; reserve it as a special keyword for requesting
+  all readable registers.
+
 ### Fixed
 
 - Allow address reuse across object types per the Modbus spec.
