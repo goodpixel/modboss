@@ -15,16 +15,6 @@ defmodule ModBoss do
                          :ok | {:error, any()})
   @type values :: [{atom(), any()}] | %{atom() => any()}
 
-  @doc false
-  def read_all(module, read_func, opts \\ []) do
-    readable_mappings =
-      module.__modbus_schema__()
-      |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
-      |> Enum.map(fn {name, _mapping} -> name end)
-
-    read(module, read_func, readable_mappings, opts)
-  end
-
   @doc """
   Read from modbus using named mappings.
 
