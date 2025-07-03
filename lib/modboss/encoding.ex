@@ -29,6 +29,14 @@ defmodule ModBoss.Encoding do
 
   @doc """
   Encode `true` as `1` and `false` as `0`
+
+  ## Examples
+
+      iex> encode_boolean(true, %{})
+      {:ok, 1}
+
+      iex> encode_boolean(false, %{})
+      {:ok, 0}
   """
   @spec encode_boolean(boolean(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
   def encode_boolean(true, _mapping), do: {:ok, 1}
@@ -36,6 +44,14 @@ defmodule ModBoss.Encoding do
 
   @doc """
   Interpret `1` as `true` and `0` as `false`
+
+  ## Examples
+
+      iex> decode_boolean(0)
+      {:ok, false}
+
+      iex> decode_boolean(1)
+      {:ok, true}
   """
   @spec decode_boolean(integer()) :: {:ok, boolean()} | {:error, binary()}
   def decode_boolean(1), do: {:ok, true}
