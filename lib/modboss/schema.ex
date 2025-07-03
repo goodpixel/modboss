@@ -2,13 +2,13 @@ defmodule ModBoss.Schema do
   @moduledoc """
   Macros for establishing Modbus schema.
 
-  The schema allows names to be assigned to individual registers or groups of contiguous
-  registers along with encoder/decoder functions. It also allows registers to be flagged
+  The schema allows names to be assigned to individual modbus objects or groups of contiguous
+  modbus objects along with encoder/decoder functions. It also allows objects to be flagged
   as readable and/or writable.
 
-  ## Naming an address
+  ## Naming a mapping
 
-  You'll name a Modbus address with this format:
+  You create a ModBoss mapping with this format:
 
       holding_register 17, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
 
@@ -27,8 +27,8 @@ defmodule ModBoss.Schema do
 
   ## Mode
 
-  All registers are read-only by default. Use `mode: :rw` to allow both reads & writes.
-  Or use `mode: :w` to mark a register as write-only.
+  All ModBoss mappings are read-only by default. Use `mode: :rw` to allow both reads & writes.
+  Or use `mode: :w` to configure a mapping as write-only.
 
   ## Automatic encoding/decoding
 
@@ -36,9 +36,9 @@ defmodule ModBoss.Schema do
   will provide functions with `encode_` or `decode_` prepended to the value provided by the `:as`
   option.
 
-  For example, if you specify `as: :on_off` for a read-only register, ModBoss will expect that
-  the schema module defines an `encode_on_off/1` function that accepts the value to encode and
-  returns either `{:ok, encoded_value}` or `{:error, messsage}`.
+  For example, if you specify `as: :on_off` for a read-only mapping, ModBoss will expect that
+  the schema module defines an `encode_on_off/1` function which accepts the value to encode and
+  returns either `{:ok, encoded_value}` or `{:error, message}`.
 
   If the function to be used lives outside of the current module, a tuple including the module
   name can be passed. For example, you can use built-in translation from `ModBoss.Encoding` such
@@ -46,23 +46,23 @@ defmodule ModBoss.Schema do
 
   > #### output of `encode_*` {: .info}
   >
-  > Your encode function may need to encode for **one or multiple** registers, depending on the
+  > Your encode function may need to encode for **one or multiple** objects, depending on the
   > mapping. You are free to return either a single value or a list of values—the important thing
-  > is that the number of values returned needs to match the number of registers for your mapping.
-  > If it doesn't, ModBoss will detect that and return an error during encoding.
+  > is that the number of values returned needs to match the number of objects from your mapping.
+  > If it doesn't, ModBoss will return an error when encoding.
   >
-  > For example, if encoding "ABC!" as ascii into a mapping with 3 registers, this would
-  > technically only "require" 2 registers (one 16-bit register for every 2 characters).
-  > However, your encoding should return a list of 3 values if that's what you've assigned
-  > to the mapping in your schema.
+  > For example, if encoding "ABC!" as ascii into a mapping with 3 registers, these characters
+  > would technically only _require_ 2 registers (one 16-bit register for every 2 characters).
+  > However, your encoding should return a list of length equaling what you've assigned to
+  > the mapping in your schema—i.e. in this example, a list of length 3.
 
   > #### input to `decode_*` {: .info}
   >
-  > When decoding a single register, the decode function will be passed the single value from that
-  > register as provided by your read function.
+  > When decoding a mapping involving a single address, the decode function will be passed the
+  > single value from that address/object as provided by your read function.
   >
-  > When decoding multiple registers (e.g. in `ModBoss.Encoding.decode_ascii/1`), the decode
-  > function will be passed a **List** of values.
+  > When decoding a mapping involving multiple addresses (e.g. in `ModBoss.Encoding.decode_ascii/1`),
+  > the decode function will be passed a **List** of values.
 
   ## Example
 
@@ -96,7 +96,7 @@ defmodule ModBoss.Schema do
     quote do
       import unquote(__MODULE__), only: [modbus_schema: 1]
 
-      Module.register_attribute(__MODULE__, :register_mappings, accumulate: true)
+      Module.register_attribute(__MODULE__, :modboss_mappings, accumulate: true)
       Module.put_attribute(__MODULE__, :max_reads_per_batch, unquote(max_reads))
       Module.put_attribute(__MODULE__, :max_writes_per_batch, unquote(max_writes))
 
@@ -140,7 +140,7 @@ defmodule ModBoss.Schema do
     module = __CALLER__.module
 
     quote bind_quoted: binding() do
-      ModBoss.Schema.create_register_mapping(module, :holding_register, addresses, name, opts)
+      ModBoss.Schema.create_mapping(module, :holding_register, addresses, name, opts)
     end
   end
 
@@ -156,7 +156,7 @@ defmodule ModBoss.Schema do
     module = __CALLER__.module
 
     quote bind_quoted: binding() do
-      ModBoss.Schema.create_register_mapping(module, :input_register, addresses, name, opts)
+      ModBoss.Schema.create_mapping(module, :input_register, addresses, name, opts)
     end
   end
 
@@ -173,7 +173,7 @@ defmodule ModBoss.Schema do
     module = __CALLER__.module
 
     quote bind_quoted: binding() do
-      ModBoss.Schema.create_register_mapping(module, :coil, addresses, name, opts)
+      ModBoss.Schema.create_mapping(module, :coil, addresses, name, opts)
     end
   end
 
@@ -189,7 +189,7 @@ defmodule ModBoss.Schema do
     module = __CALLER__.module
 
     quote bind_quoted: binding() do
-      ModBoss.Schema.create_register_mapping(module, :discrete_input, addresses, name, opts)
+      ModBoss.Schema.create_mapping(module, :discrete_input, addresses, name, opts)
     end
   end
 
@@ -202,16 +202,16 @@ defmodule ModBoss.Schema do
 
   def validate_name!(_env, _name), do: :ok
 
-  def create_register_mapping(module, register_type, address_or_range, name, opts) do
-    if not Module.has_attribute?(module, :register_mappings) do
+  def create_mapping(module, object_type, address_or_range, name, opts) do
+    if not Module.has_attribute?(module, :modboss_mappings) do
       raise """
-      Cannot assign modbus registers. Please make sure you have invoked \
+      Cannot create modbus mappings. Please make sure you have invoked \
       `use ModBoss.Schema` in #{inspect(module)}.\
       """
     end
 
-    with %Mapping{} = mapping <- Mapping.new(module, name, register_type, address_or_range, opts) do
-      Module.put_attribute(module, :register_mappings, mapping)
+    with %Mapping{} = mapping <- Mapping.new(module, name, object_type, address_or_range, opts) do
+      Module.put_attribute(module, :modboss_mappings, mapping)
     end
   end
 
@@ -226,7 +226,7 @@ defmodule ModBoss.Schema do
 
     max_holding_register_writes = max_writes[:holding_registers] || 123
     max_coil_writes = max_writes[:coils] || 1968
-    mappings = Module.get_attribute(env.module, :register_mappings)
+    mappings = Module.get_attribute(env.module, :modboss_mappings)
 
     duplicate_names =
       mappings
@@ -239,7 +239,7 @@ defmodule ModBoss.Schema do
         file: env.file,
         line: env.line,
         description:
-          "The following names were used to identify more than one register: [#{Enum.join(duplicate_names, ", ")}]."
+          "The following names were used to identify more than one mapping: [#{Enum.join(duplicate_names, ", ")}]."
     end
 
     duplicate_addresses =
@@ -259,7 +259,7 @@ defmodule ModBoss.Schema do
         file: env.file,
         line: env.line,
         description: """
-        Each address can only be registered once per object type, but the following were mapped more than once:
+        Each address can only be mapped once per object type, but the following were mapped more than once:
 
         #{Enum.map_join(duplicate_addresses, "\n", fn dup -> "  * #{inspect(dup)}" end)}
         """

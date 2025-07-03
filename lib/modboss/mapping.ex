@@ -8,29 +8,37 @@ defmodule ModBoss.Mapping do
           type: :holding_register | :input_register | :coil | :discrete_input,
           addresses: Range.t(),
           starting_address: integer(),
-          register_count: integer(),
+          address_count: integer(),
           as: atom() | {module(), atom()},
           value: any(),
           encoded_value: integer() | [integer()],
           mode: :r | :rw | :w
         }
 
-  defstruct name: nil,
-            type: nil,
-            addresses: nil,
-            starting_address: nil,
-            register_count: nil,
-            as: nil,
-            value: nil,
-            encoded_value: nil,
-            mode: :r
+  defstruct [
+    :name,
+    :type,
+    :addresses,
+    :starting_address,
+    :address_count,
+    :as,
+    :value,
+    :encoded_value,
+    :mode
+  ]
 
   defguardp is_address_or_range(address) when is_integer(address) or is_struct(address, Range)
 
   @doc false
   def new(module, name, type, addresses, opts \\ [])
       when is_atom(module) and is_atom(name) and is_address_or_range(addresses) and is_list(opts) do
-    {address_range, starting_address, register_count} = registers(addresses)
+    address_range =
+      case addresses do
+        %Range{step: 1} -> addresses
+        %Range{step: _other} -> raise("Only address ranges with step `1` are supported.")
+        address when is_integer(address) -> address..address
+      end
+
     as = Keyword.get(opts, :as) |> expand_as(module)
 
     opts =
@@ -38,12 +46,13 @@ defmodule ModBoss.Mapping do
         name: name,
         type: type,
         addresses: address_range,
-        starting_address: starting_address,
-        register_count: register_count,
+        starting_address: address_range.first,
+        address_count: address_range.last - address_range.first + 1,
         as: as
       )
 
     __MODULE__
+    |> struct(%{mode: :r})
     |> struct!(opts)
     |> validate!(:type)
     |> validate!(:mode)
@@ -91,17 +100,6 @@ defmodule ModBoss.Mapping do
   defp validate!(mapping, field) do
     value = Map.fetch!(mapping, field)
     raise "Invalid ModBoss option #{inspect([{field, value}])} for #{inspect(mapping.name)}."
-  end
-
-  defp registers(addresses) do
-    range =
-      case addresses do
-        %Range{step: 1} -> addresses
-        %Range{step: _other} -> raise("Only address ranges with step `1` are supported.")
-        address when is_integer(address) -> address..address
-      end
-
-    {range, range.first, range.last - range.first + 1}
   end
 
   @read_modes [:r, :rw]

@@ -9,7 +9,7 @@ defmodule ModBoss.MappingTest do
       assert mapping.type == :holding_register
       assert mapping.addresses == 1..1
       assert mapping.starting_address == 1
-      assert mapping.register_count == 1
+      assert mapping.address_count == 1
       assert mapping.mode == :r
     end
 
@@ -19,7 +19,7 @@ defmodule ModBoss.MappingTest do
       assert mapping.type == :coil
       assert mapping.addresses == 1..5
       assert mapping.starting_address == 1
-      assert mapping.register_count == 5
+      assert mapping.address_count == 5
       assert mapping.mode == :rw
     end
 

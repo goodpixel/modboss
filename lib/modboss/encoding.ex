@@ -143,10 +143,10 @@ defmodule ModBoss.Encoding do
 
   ## Examples
 
-      iex> encode_ascii("Hi!", %ModBoss.Mapping{register_count: 3})
+      iex> encode_ascii("Hi!", %ModBoss.Mapping{address_count: 3})
       {:ok, [18537, 8448, 0]}
 
-      iex> {:error, _too_many_characters} = encode_ascii("Hi!", %ModBoss.Mapping{register_count: 1})
+      iex> {:error, _too_many_characters} = encode_ascii("Hi!", %ModBoss.Mapping{address_count: 1})
   """
   @spec encode_ascii(binary(), Mapping.t()) :: {:ok, list(integer())} | {:error, binary()}
   def encode_ascii(text, %Mapping{} = mapping) do
@@ -179,13 +179,13 @@ defmodule ModBoss.Encoding do
   end
 
   defp pad(chars, mapping) do
-    max_chars = mapping.register_count * 2
+    max_chars = mapping.address_count * 2
     pad_count = max_chars - length(chars)
 
     if pad_count < 0 do
       message = """
       Text for #{inspect(mapping.name)} contains too many characters. \
-      With #{mapping.register_count} registers, it can hold up to #{max_chars} ASCII characters.\
+      With #{mapping.address_count} registers, it can hold up to #{max_chars} ASCII characters.\
       """
 
       {:error, message}
