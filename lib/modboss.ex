@@ -60,14 +60,9 @@ defmodule ModBoss do
   @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
           {:ok, any()} | {:error, any()}
   def read(module, read_func, name_or_names, opts \\ []) do
-    readable_mappings =
-      module.__modbus_schema__()
-      |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
-      |> Enum.map(fn {name, _mapping} -> name end)
-
     {names, plurality} =
       case name_or_names do
-        :all -> {readable_mappings, :plural}
+        :all -> {readable_mappings(module), :plural}
         name when is_atom(name) -> {[name], :singular}
         names when is_list(names) -> {names, :plural}
       end
@@ -77,6 +72,12 @@ defmodule ModBoss do
          {:ok, mappings} <- decode(mappings) do
       collect_results(mappings, plurality, opts)
     end
+  end
+
+  defp readable_mappings(module) do
+    module.__modbus_schema__()
+    |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
+    |> Enum.map(fn {name, _mapping} -> name end)
   end
 
   defp collect_results(mappings, plurality, opts) do
