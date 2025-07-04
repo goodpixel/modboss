@@ -20,7 +20,7 @@ defmodule ModBoss.SchemaTest do
     end
   end
 
-  describe "create_register_mapping" do
+  describe "create_mapping" do
     test "creates read-only mappings by default" do
       assert mapping(ExampleSchema, :foo_holding_register).mode == :r
     end
@@ -36,7 +36,7 @@ defmodule ModBoss.SchemaTest do
     end
 
     test "raises an exception if the same name is used twice" do
-      assert_raise CompileError, ~r/names were used to identify more than one register/, fn ->
+      assert_raise CompileError, ~r/names were used to identify more than one mapping/, fn ->
         Code.compile_string("""
         defmodule #{unique_module()} do
           use ModBoss.Schema
@@ -84,6 +84,22 @@ defmodule ModBoss.SchemaTest do
         end
         """)
       end
+    end
+
+    test "raises an exception if any mapping uses the reserved name `:all`" do
+      Enum.each([:holding_register, :input_register, :coil, :discrete_input], fn object_type ->
+        assert_raise CompileError, ~r/reserved by ModBoss/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema
+
+            modbus_schema do
+              #{object_type} 1, :all
+            end
+          end
+          """)
+        end
+      end)
     end
   end
 

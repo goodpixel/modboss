@@ -8,22 +8,12 @@ defmodule ModBoss do
   alias ModBoss.Mapping
 
   @typep mode :: :readable | :writable | :any
-  @type register_type :: :holding_register | :input_register | :coil | :discrete_input
-  @type read_func :: (register_type(), starting_address :: integer(), count :: integer() ->
+  @type object_type :: :holding_register | :input_register | :coil | :discrete_input
+  @type read_func :: (object_type(), starting_address :: integer(), count :: integer() ->
                         {:ok, any()} | {:error, any()})
-  @type write_func :: (register_type(), starting_address :: integer(), value_or_values :: any() ->
+  @type write_func :: (object_type(), starting_address :: integer(), value_or_values :: any() ->
                          :ok | {:error, any()})
   @type values :: [{atom(), any()}] | %{atom() => any()}
-
-  @doc false
-  def read_all(module, read_func, opts \\ []) do
-    readable_mappings =
-      module.__modbus_schema__()
-      |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
-      |> Enum.map(fn {name, _mapping} -> name end)
-
-    read(module, read_func, readable_mappings, opts)
-  end
 
   @doc """
   Read from modbus using named mappings.
@@ -32,7 +22,7 @@ defmodule ModBoss do
   batches the mappings into contiguous addresses per type, then reads and decodes the values
   before returning them.
 
-  For each batch, `read_func` will be called with the type of register (`:holding_register`,
+  For each batch, `read_func` will be called with the type of modbus object (`:holding_register`,
   `:input_register`, `:coil`, or `:discrete_input`), the starting address for the batch
   to be read, and the count of addresses to read from. It must return either `{:ok, result}`
   or `{:error, message}`.
@@ -46,7 +36,7 @@ defmodule ModBoss do
 
   ## Examples
 
-      read_func = fn register_type, starting_address, count ->
+      read_func = fn object_type, starting_address, count ->
         result = custom_read_logic(…)
         {:ok, result}
       end
@@ -70,23 +60,24 @@ defmodule ModBoss do
   @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
           {:ok, any()} | {:error, any()}
   def read(module, read_func, name_or_names, opts \\ []) do
-    readable_mappings =
-      module.__modbus_schema__()
-      |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
-      |> Enum.map(fn {name, _mapping} -> name end)
-
     {names, plurality} =
       case name_or_names do
-        :all -> {readable_mappings, :plural}
+        :all -> {readable_mappings(module), :plural}
         name when is_atom(name) -> {[name], :singular}
         names when is_list(names) -> {names, :plural}
       end
 
     with {:ok, mappings} <- get_mappings(:readable, module, names),
-         {:ok, mappings} <- read_registers(module, mappings, read_func),
+         {:ok, mappings} <- read_mappings(module, mappings, read_func),
          {:ok, mappings} <- decode(mappings) do
       collect_results(mappings, plurality, opts)
     end
+  end
+
+  defp readable_mappings(module) do
+    module.__modbus_schema__()
+    |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
+    |> Enum.map(fn {name, _mapping} -> name end)
   end
 
   defp collect_results(mappings, plurality, opts) do
@@ -130,8 +121,8 @@ defmodule ModBoss do
       mapping.encoded_value
       |> List.wrap()
       |> Enum.with_index(mapping.starting_address)
-      |> Enum.map(fn {value_for_register, address} ->
-        {{mapping.type, address}, value_for_register}
+      |> Enum.map(fn {value_for_object, address} ->
+        {{mapping.type, address}, value_for_object}
       end)
     end)
     |> Enum.into(%{})
@@ -141,9 +132,9 @@ defmodule ModBoss do
   Write to modbus using named mappings.
 
   ModBoss automatically encodes your `values`, then batches any encoded values destined for
-  contiguous registers—creating separate batches per register type.
+  contiguous objects—creating separate batches per object type.
 
-  For each batch, `write_func` will be called with the type of register (`:holding_register` or
+  For each batch, `write_func` will be called with the type of object (`:holding_register` or
   `:coil`), the starting address for the batch to be written, and a list of values to write.
   It must return either `:ok` or `{:error, message}`.
 
@@ -163,7 +154,7 @@ defmodule ModBoss do
 
   ## Example
 
-      write_func = fn register_type, starting_address, value_or_values ->
+      write_func = fn object_type, starting_address, value_or_values ->
         result = custom_write_logic(…)
         {:ok, result}
       end
@@ -176,7 +167,7 @@ defmodule ModBoss do
     with {:ok, mappings} <- get_mappings(:writable, module, get_keys(values)),
          mappings <- put_values(mappings, values),
          {:ok, mappings} <- encode(mappings),
-         {:ok, _mappings} <- write_registers(module, mappings, write_func) do
+         {:ok, _mappings} <- write_mappings(module, mappings, write_func) do
       :ok
     end
   end
@@ -191,11 +182,11 @@ defmodule ModBoss do
   end
 
   @spec get_mappings(mode(), module(), list()) :: {:ok, [Mapping.t()]} | {:error, String.t()}
-  defp get_mappings(mode, module, register_names) when is_list(register_names) do
+  defp get_mappings(mode, module, mapping_names) when is_list(mapping_names) do
     schema = module.__modbus_schema__()
 
     {mappings, unknown_names} =
-      register_names
+      mapping_names
       |> Enum.map(fn name ->
         case Map.get(schema, name, :unknown) do
           :unknown -> name
@@ -214,11 +205,11 @@ defmodule ModBoss do
 
       mode == :readable and Enum.any?(unreadable(mappings)) ->
         names = unreadable(mappings) |> Enum.map_join(", ", fn %{name: name} -> inspect(name) end)
-        {:error, "Register(s) #{names} in #{inspect(module)} are not readable."}
+        {:error, "ModBoss Mapping(s) #{names} in #{inspect(module)} are not readable."}
 
       mode == :writable and Enum.any?(unwritable(mappings)) ->
         names = unwritable(mappings) |> Enum.map_join(", ", fn %{name: name} -> inspect(name) end)
-        {:error, "Register(s) #{names} in #{inspect(module)} are not writable."}
+        {:error, "ModBoss Mapping(s) #{names} in #{inspect(module)} are not writable."}
 
       true ->
         {:ok, mappings}
@@ -228,20 +219,20 @@ defmodule ModBoss do
   defp unreadable(mappings), do: Enum.reject(mappings, &Mapping.readable?/1)
   defp unwritable(mappings), do: Enum.reject(mappings, &Mapping.writable?/1)
 
-  @spec read_registers(module(), [Mapping.t()], fun) :: {:ok, [Mapping.t()]} | {:error, any()}
-  defp read_registers(module, mappings, read_func) do
-    with {:ok, all_values} <- do_read_registers(module, mappings, read_func) do
+  @spec read_mappings(module(), [Mapping.t()], fun) :: {:ok, [Mapping.t()]} | {:error, any()}
+  defp read_mappings(module, mappings, read_func) do
+    with {:ok, all_values} <- do_read_mappings(module, mappings, read_func) do
       Enum.map(mappings, fn
-        %Mapping{register_count: 1} = mapping ->
+        %Mapping{address_count: 1} = mapping ->
           value = Map.fetch!(all_values, mapping.starting_address)
           %{mapping | encoded_value: value}
 
-        %Mapping{register_count: _plural} = mapping ->
-          registers = Enum.to_list(mapping.addresses)
+        %Mapping{address_count: _plural} = mapping ->
+          addresses = Enum.to_list(mapping.addresses)
 
           values =
             all_values
-            |> Map.take(registers)
+            |> Map.take(addresses)
             |> Enum.sort_by(fn {address, _value} -> address end)
             |> Enum.map(fn {_address, value} -> value end)
 
@@ -251,15 +242,15 @@ defmodule ModBoss do
     end
   end
 
-  @spec do_read_registers(module(), [Mapping.t()], fun) :: {:ok, map()}
-  defp do_read_registers(module, mappings, read_func) do
+  @spec do_read_mappings(module(), [Mapping.t()], fun) :: {:ok, map()}
+  defp do_read_mappings(module, mappings, read_func) do
     mappings
     |> chunk_mappings(module, :read)
     |> Enum.map(fn [first | _rest] = chunk ->
       initial_acc = {first.type, first.starting_address, 0}
 
-      Enum.reduce(chunk, initial_acc, fn mapping, {type, starting_address, register_count} ->
-        {type, starting_address, register_count + mapping.register_count}
+      Enum.reduce(chunk, initial_acc, fn mapping, {type, starting_address, address_count} ->
+        {type, starting_address, address_count + mapping.address_count}
       end)
     end)
     |> Enum.reduce_while({:ok, %{}}, fn batch, {:ok, acc} ->
@@ -271,13 +262,13 @@ defmodule ModBoss do
   end
 
   @spec read_batch(fun(), {any(), integer(), integer()}) :: {:ok, map()} | {:error, any()}
-  defp read_batch(read_func, {type, starting_address, register_count}) do
-    with {:ok, value_or_values} <- read_func.(type, starting_address, register_count) do
+  defp read_batch(read_func, {type, starting_address, address_count}) do
+    with {:ok, value_or_values} <- read_func.(type, starting_address, address_count) do
       values = List.wrap(value_or_values)
       value_count = Enum.count(values)
 
-      if value_count != register_count do
-        raise "Attempted to read #{register_count} registers starting from address #{starting_address} but received #{value_count} values."
+      if value_count != address_count do
+        raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
       end
 
       batch_results =
@@ -289,7 +280,7 @@ defmodule ModBoss do
     end
   end
 
-  defp write_registers(module, mappings, write_func) do
+  defp write_mappings(module, mappings, write_func) do
     mappings
     |> chunk_mappings(module, :write)
     |> Enum.map(fn [first | _rest] = chunk ->
@@ -313,24 +304,24 @@ defmodule ModBoss do
   end
 
   @spec chunk_mappings([Mapping.t()], module(), :read | :write) ::
-          [{register_type(), integer(), [any()]}]
+          [{object_type(), integer(), [any()]}]
   defp chunk_mappings(mappings, module, mode) do
     chunk_fun = fn %Mapping{type: type, addresses: %Range{first: address}} = mapping, acc ->
       max_chunk = module.__max_batch__(mode, type)
 
       case acc do
-        {[], 0} when mapping.register_count <= max_chunk ->
-          {:cont, {[mapping], mapping.register_count}}
+        {[], 0} when mapping.address_count <= max_chunk ->
+          {:cont, {[mapping], mapping.address_count}}
 
         {[prior | _] = mappings, count}
-        when prior.addresses.last + 1 == address and count + mapping.register_count <= max_chunk ->
-          {:cont, {[mapping | mappings], count + mapping.register_count}}
+        when prior.addresses.last + 1 == address and count + mapping.address_count <= max_chunk ->
+          {:cont, {[mapping | mappings], count + mapping.address_count}}
 
-        {mappings, _count} when mapping.register_count <= max_chunk ->
-          {:cont, Enum.reverse(mappings), {[mapping], mapping.register_count}}
+        {mappings, _count} when mapping.address_count <= max_chunk ->
+          {:cont, Enum.reverse(mappings), {[mapping], mapping.address_count}}
 
-        {_, _} when mapping.register_count > max_chunk ->
-          raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} registers."
+        {_, _} when mapping.address_count > max_chunk ->
+          raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
       end
     end
 
@@ -363,7 +354,7 @@ defmodule ModBoss do
   defp encode_value(%Mapping{} = mapping) do
     with {module, function, args} <- get_encode_mfa(mapping),
          {:ok, encoded} <- apply(module, function, args),
-         :ok <- verify_register_count(mapping, encoded) do
+         :ok <- verify_value_count(mapping, encoded) do
       {:ok, encoded}
     end
   end
@@ -375,9 +366,9 @@ defmodule ModBoss do
     # we only pass the value to be encoded.
     #
     # However, when calling built-in encoding functions, we pass both the value to be encoded
-    # _and_ the mapping. We do this because in some cases we need to know how many registers
+    # _and_ the mapping. We do this because in some cases we need to know how many objects
     # we're encoding for in order to provide truly generic encoders. For example, when encoding
-    # a string to ASCII, we may need to add padding to fill out the mapped registers.
+    # a string to ASCII, we may need to add padding to fill out the mapped objects.
     arguments =
       case module do
         ModBoss.Encoding -> [mapping.value, mapping]
@@ -421,8 +412,8 @@ defmodule ModBoss do
     end
   end
 
-  defp verify_register_count(mapping, encoded) do
-    expected_count = mapping.register_count
+  defp verify_value_count(mapping, encoded) do
+    expected_count = mapping.address_count
 
     case List.wrap(encoded) |> length() do
       ^expected_count ->
@@ -430,7 +421,7 @@ defmodule ModBoss do
 
       _ ->
         {:error,
-         "Encoded value #{inspect(encoded)} for #{inspect(mapping.name)} does not match the number of registers."}
+         "Encoded value #{inspect(encoded)} for #{inspect(mapping.name)} does not match the number of mapped addresses."}
     end
   end
 
