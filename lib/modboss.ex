@@ -106,7 +106,7 @@ defmodule ModBoss do
       iex> ModBoss.encode(MyDevice.Schema, foo: "Yay")
       {:ok, %{{:holding_register, 15} => 22881, {:holding_register, 16} => 30976}}
   """
-  @spec encode(module(), values()) :: {:ok, map()} | {:error, any()}
+  @spec encode(module(), values()) :: {:ok, map()} | {:error, String.t()}
   def encode(module, values) when is_atom(module) do
     with {:ok, mappings} <- get_mappings(:any, module, get_keys(values)),
          mappings <- put_values(mappings, values),
@@ -383,13 +383,16 @@ defmodule ModBoss do
     end
   end
 
-  @spec decode([Mapping.t()]) :: {:ok, [Mapping.t()]}
-  defp decode(mappings) do
+  @spec maybe_decode([Mapping.t()]) :: {:ok, [Mapping.t()]} | {:error, String.t()}
     Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
       case decode_value(mapping) do
         {:ok, decoded_value} ->
           updated_mapping = %{mapping | value: decoded_value}
           {:cont, {:ok, [updated_mapping | acc]}}
+
+        {:error, error} ->
+          message = "Failed to decode #{inspect(mapping.name)}. #{error}"
+          {:halt, {:error, message}}
       end
     end)
   end

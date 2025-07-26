@@ -330,6 +330,37 @@ defmodule ModBossTest do
                ModBoss.read(schema, read_func(device), [:yep, :nope, :text])
     end
 
+    test "returns an error if decoding fails" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        modbus_schema do
+          # Assumes the function lives in the current module…
+          holding_register 1, :yep, as: :boolean
+          holding_register 2, :nope, as: :boolean
+        end
+
+        def decode_boolean(0), do: {:ok, false}
+        def decode_boolean(1), do: {:ok, true}
+        def decode_boolean(value), do: {:error, "Not sure what to do with \#{value}."}
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      # only 1 and 2 are values expected to be decoded, so this will break…
+      set_objects(device, %{
+        1 => 1,
+        2 => 33
+      })
+
+      message = "Failed to decode :nope. Not sure what to do with 33."
+      assert {:error, ^message} = ModBoss.read(schema, read_func(device), [:yep, :nope])
+    end
+
     test "allows reading of 'raw' values" do
       schema = unique_module()
 
