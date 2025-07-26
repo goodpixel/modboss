@@ -396,6 +396,34 @@ defmodule ModBossTest do
                ModBoss.read(schema, read_func(device), [:yep, :nope, :text], decode: false)
     end
 
+    test "bypasses (potentially-buggy) decode logic when asked to return raw values" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        modbus_schema do
+          holding_register 1, :yep, as: :boolean
+          holding_register 2, :nope, as: :boolean
+        end
+
+        def decode_boolean(0), do: raise "bam!"
+        def decode_boolean(1), do: raise "kapow!"
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        1 => 1,
+        2 => 0
+      })
+
+      assert {:ok, %{yep: 1, nope: 0}} =
+               ModBoss.read(schema, read_func(device), [:yep, :nope], decode: false)
+    end
+
     test "fetches all readable mappings if told to read `:all`" do
       schema = unique_module()
 

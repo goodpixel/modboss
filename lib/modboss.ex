@@ -67,10 +67,13 @@ defmodule ModBoss do
         names when is_list(names) -> {names, :plural}
       end
 
+    should_decode = Keyword.get(opts, :decode, true)
+    field_to_return = if should_decode, do: :value, else: :encoded_value
+
     with {:ok, mappings} <- get_mappings(:readable, module, names),
          {:ok, mappings} <- read_mappings(module, mappings, read_func),
-         {:ok, mappings} <- decode(mappings) do
-      collect_results(mappings, plurality, opts)
+         {:ok, mappings} <- maybe_decode(mappings, should_decode) do
+      collect_results(mappings, plurality, field_to_return)
     end
   end
 
@@ -80,9 +83,7 @@ defmodule ModBoss do
     |> Enum.map(fn {name, _mapping} -> name end)
   end
 
-  defp collect_results(mappings, plurality, opts) do
-    field_to_return = if Keyword.get(opts, :decode, true), do: :value, else: :encoded_value
-
+  defp collect_results(mappings, plurality, field_to_return) do
     mappings
     |> Enum.map(&{&1.name, Map.get(&1, field_to_return)})
     |> then(fn results ->
@@ -383,7 +384,10 @@ defmodule ModBoss do
     end
   end
 
-  @spec maybe_decode([Mapping.t()]) :: {:ok, [Mapping.t()]} | {:error, String.t()}
+  @spec maybe_decode([Mapping.t()], boolean()) :: {:ok, [Mapping.t()]} | {:error, String.t()}
+  defp maybe_decode(mappings, false), do: {:ok, mappings}
+
+  defp maybe_decode(mappings, true) do
     Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
       case decode_value(mapping) do
         {:ok, decoded_value} ->
