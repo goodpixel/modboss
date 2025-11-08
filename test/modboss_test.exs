@@ -155,6 +155,82 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
     end
 
+    test "can retrieve very large mappings from across multiple batched reads" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        modbus_schema do
+          holding_register 1, :foo
+          holding_register 2..10, :bar, as: {Modbus.Encoding, :ascii}
+        end
+      end
+      """)
+
+      device =
+        start_supervised!(
+          {Agent,
+           fn ->
+             %{
+               foo: 123,
+               bar: "A big announcement"
+             }
+           end}
+        )
+
+      # holding_register_values = for i <- 1..126, into: %{}, do: {i, 1}
+      # input_register_values = for i <- 201..326, into: %{}, do: {i, 1}
+      # coil_values = for i <- 2001..4001, into: %{}, do: {i, 1}
+      # discrete_input_values = for i <- 5001..7001, into: %{}, do: {i, 1}
+
+      # all_values =
+      #   %{}
+      #   |> Map.merge(holding_register_values)
+      #   |> Map.merge(input_register_values)
+      #   |> Map.merge(coil_values)
+      #   |> Map.merge(discrete_input_values)
+
+      # set_objects(device, all_values)
+
+      # single = [:holding_1, :holding_125]
+      # double = [:holding_1, :holding_125, :holding_126]
+
+      # assert {:ok, %{}} = ModBoss.read(schema, read_func(device), single)
+      # assert 1 = get_read_count(device)
+
+      # assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double)
+      # assert 2 = get_read_count(device)
+
+      # single = [:input_201, :input_325]
+      # double = [:input_201, :input_325, :input_326]
+
+      # assert {:ok, %{}} = ModBoss.read(schema, read_func(device), single)
+      # assert 1 = get_read_count(device)
+
+      # assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double)
+      # assert 2 = get_read_count(device)
+
+      # single = [:coil_2001, :coil_4000]
+      # double = [:coil_2001, :coil_4000, :coil_4001]
+
+      # assert {:ok, %{}} = ModBoss.read(schema, read_func(device), single)
+      # assert 1 = get_read_count(device)
+
+      # assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double)
+      # assert 2 = get_read_count(device)
+
+      # single = [:discrete_input_5001, :discrete_input_7000]
+      # double = [:discrete_input_5001, :discrete_input_7000, :discrete_input_7001]
+
+      # assert {:ok, %{}} = ModBoss.read(schema, read_func(device), single)
+      # assert 1 = get_read_count(device)
+
+      # assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double)
+      # assert 2 = get_read_count(device)
+    end
+
     test "can customize batch sizes per object type" do
       schema = unique_module()
       max_holding_register_reads = Enum.random(1..3)
