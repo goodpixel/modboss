@@ -15,6 +15,28 @@ defmodule ModBoss do
                          :ok | {:error, any()})
   @type values :: [{atom(), any()}] | %{atom() => any()}
 
+  def mappings(module) do
+    module.__modbus_schema__()
+    |> Map.values()
+    |> Enum.sort_by(& &1.starting_address)
+    |> Enum.group_by(& &1.type, fn mapping ->
+      address =
+        case mapping.address_count do
+          1 -> mapping.starting_address
+          _ -> mapping.addresses
+        end
+
+      mode =
+        case mapping.mode do
+          :r -> :read_only
+          :rw -> :read_write
+          :w -> :write_only
+        end
+
+      {address, mapping.name, mode}
+    end)
+  end
+
   @doc """
   Read from modbus using named mappings.
 
