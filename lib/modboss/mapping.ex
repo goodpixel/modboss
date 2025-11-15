@@ -4,13 +4,15 @@ defmodule ModBoss.Mapping do
   """
 
   @type name() :: atom()
-  @type type() :: :holding_register | :input_register | :coil | :discrete_input
+  @type object_type :: :holding_register | :input_register | :coil | :discrete_input
+  @type address :: non_neg_integer()
+  @type count :: pos_integer()
 
   @type t() :: %__MODULE__{
           name: name(),
-          type: type(),
-          starting_address: non_neg_integer(),
-          address_count: pos_integer(),
+          type: object_type(),
+          starting_address: address(),
+          address_count: count(),
           as: atom() | {module(), atom()},
           value: any(),
           encoded_value: integer() | [integer()],

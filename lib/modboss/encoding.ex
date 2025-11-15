@@ -1,21 +1,19 @@
 defmodule ModBoss.Encoding do
   @moduledoc """
-  Built-in encoding/decoding functions to get you started.
+  Built-in encoding/decoding functions
 
-  To make use of these functions, use the `:as` option in your `ModBoss.Schema` but leave off
-  the `encode_` or `decode_` prefix.
+  The following encoders are provided out of the box to get you started.
+  * ascii
+  * boolean
+  * signed_int
+  * unsigned_int
 
-  For example, to use the built-in ASCII translation, specify `as: :ascii` in your schema.
+  To use them, pass them along with this module name to the `:as` option. For example:
 
-  ### Note about that extra arg…
+      modbus_schema do
+        holding_register 1..5, :model, as: {ModBoss.Encoding, :ascii}
+      end
 
-  Note that for built-in `encode_*` functions, we pass not just the value but also the mapping
-  itself. That's why you'll see an extra argument passed to these encoders!
-
-  We do this in order to provide more generic and helpful functions out the box (like
-  encoding of ASCII, which requires knowledge of how many registers we're encoding for). However,
-  when providing your own `encode_*` functions, you'll only be passed the value to be encoded
-  (and not the mapping).
   """
   import Bitwise
   alias ModBoss.Encoding.Metadata
@@ -38,8 +36,8 @@ defmodule ModBoss.Encoding do
       {:ok, 0}
   """
   @spec encode_boolean(boolean(), Metadata.t()) :: {:ok, integer()} | {:error, binary()}
-  def encode_boolean(true, _meta), do: {:ok, 1}
-  def encode_boolean(false, _meta), do: {:ok, 0}
+  def encode_boolean(true, _metadata), do: {:ok, 1}
+  def encode_boolean(false, _metadata), do: {:ok, 0}
 
   @doc """
   Interpret `1` as `true` and `0` as `false`
@@ -69,12 +67,13 @@ defmodule ModBoss.Encoding do
       iex> {:ok, 65_535} = encode_unsigned_int(65_535, %{})
       iex> {:error, _too_large} = encode_unsigned_int(65_536, %{})
   """
-  @spec encode_unsigned_int(integer(), Metadata.t()) :: {:ok, integer()} | {:error, binary()}
-  def encode_unsigned_int(value, _meta) when value >= 0 and value <= 65_535 do
+  @spec encode_unsigned_int(non_neg_integer(), Metadata.t()) ::
+          {:ok, non_neg_integer()} | {:error, binary()}
+  def encode_unsigned_int(value, _metadata) when value >= 0 and value <= 65_535 do
     {:ok, value}
   end
 
-  def encode_unsigned_int(value, _meta) do
+  def encode_unsigned_int(value, _metadata) do
     {:error, "Value #{value} is outside the range of a 16-bit unsigned integer (0 to 65,535)"}
   end
 
@@ -86,7 +85,7 @@ defmodule ModBoss.Encoding do
       iex> decode_unsigned_int(65_535)
       {:ok, 65_535}
   """
-  @spec decode_unsigned_int(integer()) :: {:ok, integer()}
+  @spec decode_unsigned_int(non_neg_integer()) :: {:ok, non_neg_integer()}
   def decode_unsigned_int(value) do
     <<decoded_value::unsigned-integer-size(16)>> = <<value::16>>
     {:ok, decoded_value}
@@ -106,12 +105,12 @@ defmodule ModBoss.Encoding do
       iex> {:error, _too_large} = encode_signed_int(32_768, %{})
   """
   @spec encode_signed_int(integer(), Metadata.t()) :: {:ok, integer()} | {:error, binary()}
-  def encode_signed_int(value, _meta)
+  def encode_signed_int(value, _metadata)
       when is_integer(value) and value >= -32768 and value <= 32767 do
     {:ok, value}
   end
 
-  def encode_signed_int(value, _meta) do
+  def encode_signed_int(value, _metadata) do
     {:error, "Value #{value} is outside the range of a 16-bit signed integer (-32768 to 32767)"}
   end
 
@@ -152,10 +151,10 @@ defmodule ModBoss.Encoding do
       true
   """
   @spec encode_ascii(binary(), Metadata.t()) :: {:ok, list(integer())} | {:error, binary()}
-  def encode_ascii(text, %Metadata{type: :holding_register} = meta) when is_binary(text) do
-    with :ok <- verify_ascii(text, meta),
+  def encode_ascii(text, %Metadata{type: :holding_register} = metadata) when is_binary(text) do
+    with :ok <- verify_ascii(text, metadata),
          {:ok, chars} <- get_chars(text),
-         {:ok, padded_chars} <- pad(chars, text, meta),
+         {:ok, padded_chars} <- pad(chars, text, metadata),
          registers <- chars_to_registers(padded_chars) do
       {:ok, registers}
     end

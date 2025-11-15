@@ -8,11 +8,17 @@ defmodule ModBoss do
   alias ModBoss.Mapping
 
   @typep mode :: :readable | :writable | :any
-  @type object_type :: :holding_register | :input_register | :coil | :discrete_input
-  @type read_func :: (object_type(), starting_address :: integer(), count :: integer() ->
+
+  @type read_func :: (Mapping.object_type(),
+                      starting_address :: Mapping.address(),
+                      count :: Mapping.count() ->
                         {:ok, any()} | {:error, any()})
-  @type write_func :: (object_type(), starting_address :: integer(), value_or_values :: any() ->
+
+  @type write_func :: (Mapping.object_type(),
+                       starting_address :: Mapping.address(),
+                       value_or_values :: any() ->
                          :ok | {:error, any()})
+
   @type values :: [{atom(), any()}] | %{atom() => any()}
 
   @doc """
@@ -305,7 +311,7 @@ defmodule ModBoss do
   end
 
   @spec chunk_mappings([Mapping.t()], module(), :read | :write) ::
-          [{object_type(), integer(), [any()]}]
+          [{Mapping.object_type(), integer(), [any()]}]
   defp chunk_mappings(mappings, module, mode) do
     chunk_fun = fn %Mapping{type: type, starting_address: address} = mapping, acc ->
       max_chunk = module.__max_batch__(mode, type)

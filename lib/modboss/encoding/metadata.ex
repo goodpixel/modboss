@@ -12,8 +12,8 @@ defmodule ModBoss.Encoding.Metadata do
 
   @type t() :: %__MODULE__{
           name: Mapping.name(),
-          type: Mapping.type(),
-          address_count: pos_integer()
+          type: Mapping.object_type(),
+          address_count: Mapping.count()
         }
 
   defstruct [:name, :type, :address_count]
