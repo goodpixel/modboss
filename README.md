@@ -46,7 +46,7 @@ Decode functions will receive the values to decode and must return
 defmodule MyDevice.Schema do
   use ModBoss.Schema
 
-  modbus_schema do
+  schema do
     holding_register 1, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
     holding_register 2..5, :model_name, as: {ModBoss.Encoding, :ascii}
     holding_register 6, :version, as: :fw_version, mode: :rw
