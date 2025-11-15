@@ -31,18 +31,17 @@ end
 
 ### 1. Map your schema
 
-Starting with the type of object, you'll define the addresses to include and a friendly name
-for the mapping.
+Starting with the type of object, you'll define the addresses to include and a
+friendly name for the mapping.
 
-The `:as` option dictates how values will be translated. You can use translation functions
-from another module—like those found in `ModBoss.Encoding`—or provide your own as shown here
-with `as: :fw_version`.
+The `:as` option dictates how values will be translated. Passing an atom will
+cause ModBoss to search for corresponding `encode_`/`decode_` functions within
+the same module as your schema. Alternatively, you can use encoder functions
+from another module—such as those provided out of the box by `ModBoss.Encoding`.
+See `ModBoss.Schema` for details.
 
-When providing your own translation functions, ModBoss expects that you'll provide functions
-corresponding to the `:as` option but with `encode_` / `decode_` prefixes added as applicable.
-These functions will receive the value to be translated and should return either
-`{:ok, translated_value}` or `{:error, message}`.
-
+Decode functions will receive the values to decode and must return
+`{:ok, decoded}` or `{:error, message}`.
 ```elixir
 defmodule MyDevice.Schema do
   use ModBoss.Schema
@@ -54,7 +53,7 @@ defmodule MyDevice.Schema do
     # Also supports: input_register / coil / discrete_input
   end
 
-  def encode_fw_version(value) do
+  def encode_fw_version(value, _metadata) do
     encoded_value = do_encode(value)
     {:ok, encoded_value}
   end
@@ -71,7 +70,7 @@ In this example:
   decoder that ships with ModBoss.
 * **Holding registers 2–5** are grouped under the name `model_name` and use a built-in ASCII
   decoder.
-* **Holding register 6** is named `version` and uses `encode_fw_version/1` and `decode_fw_version/1`
+* **Holding register 6** is named `version` and uses `encode_fw_version/2` and `decode_fw_version/1`
   to translate values being written or read respectively.
 
 ### 2. Provide generic read/write functions

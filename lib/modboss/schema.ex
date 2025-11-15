@@ -2,9 +2,9 @@ defmodule ModBoss.Schema do
   @moduledoc """
   Macros for establishing Modbus schema.
 
-  The schema allows names to be assigned to individual modbus objects or groups of contiguous
-  modbus objects along with encoder/decoder functions. It also allows objects to be flagged
-  as readable and/or writable.
+  The schema allows names to be assigned to individual modbus objects or groups
+  of contiguous modbus objects along with encoder/decoder functions. It also
+  allows objects to be flagged as readable and/or writable.
 
   ## Naming a mapping
 
@@ -12,57 +12,63 @@ defmodule ModBoss.Schema do
 
       holding_register 17, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
 
-  This establishes address 17 as a holding register with the name `:outdoor_temp`.
-  The raw value from the register will be passed to `ModBoss.Encoding.decode_signed_int/1`
-  before being returned.
+  This establishes address 17 as a holding register with the name
+  `:outdoor_temp`. The raw value from the register will be passed to
+  `ModBoss.Encoding.decode_signed_int/1` before being returned.
 
-  Similarly, to set aside a **group of** registers to hold a single logical value,
-  it would look like:
+  Similarly, to set aside a **group of** registers to hold a single logical
+  value, it would look like:
 
       holding_register 20..23, :model_name, as: {ModBoss.Encoding, :ascii}
 
-  This establishes addresses 20–23 as holding registers with the name `:model_name`. The raw
-  values from these registers will be passed (as a list) to `ModBoss.Encoding.decode_ascii/1`
-  before being returned.
+  This establishes addresses 20–23 as holding registers with the name
+  `:model_name`. The raw values from these registers will be passed (as a list)
+  to `ModBoss.Encoding.decode_ascii/1` before being returned.
 
   ## Mode
 
-  All ModBoss mappings are read-only by default. Use `mode: :rw` to allow both reads & writes.
-  Or use `mode: :w` to configure a mapping as write-only.
+  All ModBoss mappings are read-only by default. Use `mode: :rw` to allow both
+  reads & writes. Or use `mode: :w` to configure a mapping as write-only.
 
   ## Automatic encoding/decoding
 
-  Depending on whether a mapping is flagged as readable/writable, it is expected that you
-  will provide functions with `encode_` or `decode_` prepended to the value provided by the `:as`
-  option.
+  Depending on whether a mapping is flagged as readable/writable, it is expected
+  that you will provide functions with `encode_` or `decode_` prepended to the
+  value provided by the `:as` option.
 
-  For example, if you specify `as: :on_off` for a read-only mapping, ModBoss will expect that
-  the schema module defines an `encode_on_off/1` function which accepts the value to encode and
-  returns either `{:ok, encoded_value}` or `{:error, message}`.
+  For example, if you specify `as: :on_off` for a read-only mapping, ModBoss
+  will expect that the schema module defines an `encode_on_off/2` function which
+  accepts the value to encode and `ModBoss.Encoding.Metadata` (to optionally
+  assist with encoding) and must return either `{:ok, encoded_value}` or
+  `{:error, message}`.
 
-  If the function to be used lives outside of the current module, a tuple including the module
-  name can be passed. For example, you can use built-in translation from `ModBoss.Encoding` such
-  as `:boolean`, `:signed_int`, `:unsigned_int`, and `:ascii`.
+  If the function to be used lives outside of the current module, a tuple
+  including the module name can be passed. For example, you can use built-in
+  encoders from `ModBoss.Encoding`.
 
   > #### output of `encode_*` {: .info}
   >
-  > Your encode function may need to encode for **one or multiple** objects, depending on the
-  > mapping. You are free to return either a single value or a list of values—the important thing
-  > is that the number of values returned needs to match the number of objects from your mapping.
-  > If it doesn't, ModBoss will return an error when encoding.
+  > Your encode function may need to encode for **one or multiple** objects,
+  > depending on the mapping. You are free to return either a single value or
+  > a list of values—the important thing is that the number of values returned
+  > needs to match the number of objects from your mapping. If it doesn't,
+  > ModBoss will return an error when encoding.
   >
-  > For example, if encoding "ABC!" as ascii into a mapping with 3 registers, these characters
-  > would technically only _require_ 2 registers (one 16-bit register for every 2 characters).
-  > However, your encoding should return a list of length equaling what you've assigned to
-  > the mapping in your schema—i.e. in this example, a list of length 3.
+  > For example, if encoding "ABC!" as ascii into a mapping with 3 registers,
+  > these characters would technically only _require_ 2 registers (one 16-bit
+  > register for every 2 characters). However, your encoding should return a
+  > list of length equaling what you've assigned to the mapping in your schema—
+  > i.e. in this example, a list of length 3.
 
   > #### input to `decode_*` {: .info}
   >
-  > When decoding a mapping involving a single address, the decode function will be passed the
-  > single value from that address/object as provided by your read function.
+  > When decoding a mapping involving a single address, the decode function will
+  > be passed the single value from that address/object as provided by your read
+  > function.
   >
-  > When decoding a mapping involving multiple addresses (e.g. in `ModBoss.Encoding.decode_ascii/1`),
-  > the decode function will be passed a **List** of values.
+  > When decoding a mapping involving multiple addresses
+  > (e.g. in `ModBoss.Encoding.decode_ascii/1`), the decode function will be
+  > passed a **List** of values.
 
   ## Example
 
@@ -79,8 +85,8 @@ defmodule ModBoss.Schema do
           discrete_input 400, :baz, as: {ModBoss.Encoding, :boolean}
         end
 
-        def encode_on_off(:on), do: {:ok, 1}
-        def encode_on_off(:off), do: {:ok, 0}
+        def encode_on_off(:on, _metadata), do: {:ok, 1}
+        def encode_on_off(:off, _metadata), do: {:ok, 0}
 
         def decode_on_off(1), do: {:ok, :on}
         def decode_on_off(0), do: {:ok, :off}
