@@ -9,7 +9,6 @@ defmodule ModBoss.Mapping do
   @type t() :: %__MODULE__{
           name: name(),
           type: type(),
-          addresses: Range.t(),
           starting_address: non_neg_integer(),
           address_count: pos_integer(),
           as: atom() | {module(), atom()},
@@ -21,7 +20,6 @@ defmodule ModBoss.Mapping do
   defstruct [
     :name,
     :type,
-    :addresses,
     :starting_address,
     :address_count,
     :as,
@@ -48,7 +46,6 @@ defmodule ModBoss.Mapping do
       Keyword.merge(opts,
         name: name,
         type: type,
-        addresses: address_range,
         starting_address: address_range.first,
         address_count: address_range.last - address_range.first + 1,
         as: as
@@ -60,6 +57,13 @@ defmodule ModBoss.Mapping do
     |> validate!(:type)
     |> validate!(:mode)
     |> validate!(:as)
+  end
+
+  @doc """
+  Get the Range of addresses for the given `ModBoss.Mapping`
+  """
+  def address_range(%__MODULE__{starting_address: start, address_count: count}) do
+    start..(start + count - 1)
   end
 
   defp expand_as(nil, _schema_module) do

@@ -27,12 +27,14 @@ defmodule ModBoss.SchemaTest do
 
     test "allows a single address to be provided" do
       mapping = mapping(ExampleSchema, :qux_holding_register)
-      assert mapping.addresses == 4..4
+      assert mapping.starting_address == 4
+      assert mapping.address_count == 1
     end
 
     test "allows a range of addresses to be provided" do
       mapping = mapping(ExampleSchema, :quux_holding_register)
-      assert mapping.addresses == 5..10
+      assert mapping.starting_address == 5
+      assert mapping.address_count == 6
     end
 
     test "raises an exception if the same name is used twice" do

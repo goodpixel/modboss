@@ -229,7 +229,7 @@ defmodule ModBoss do
           %{mapping | encoded_value: value}
 
         %Mapping{address_count: _plural} = mapping ->
-          addresses = Enum.to_list(mapping.addresses)
+          addresses = Mapping.address_range(mapping) |> Enum.to_list()
 
           values =
             all_values
@@ -307,7 +307,7 @@ defmodule ModBoss do
   @spec chunk_mappings([Mapping.t()], module(), :read | :write) ::
           [{object_type(), integer(), [any()]}]
   defp chunk_mappings(mappings, module, mode) do
-    chunk_fun = fn %Mapping{type: type, addresses: %Range{first: address}} = mapping, acc ->
+    chunk_fun = fn %Mapping{type: type, starting_address: address} = mapping, acc ->
       max_chunk = module.__max_batch__(mode, type)
 
       case acc do
@@ -315,7 +315,8 @@ defmodule ModBoss do
           {:cont, {[mapping], mapping.address_count}}
 
         {[prior | _] = mappings, count}
-        when prior.addresses.last + 1 == address and count + mapping.address_count <= max_chunk ->
+        when prior.starting_address + prior.address_count == address and
+               count + mapping.address_count <= max_chunk ->
           {:cont, {[mapping | mappings], count + mapping.address_count}}
 
         {mappings, _count} when mapping.address_count <= max_chunk ->
