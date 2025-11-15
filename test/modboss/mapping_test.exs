@@ -7,7 +7,6 @@ defmodule ModBoss.MappingTest do
       mapping = Mapping.new(__MODULE__, :foo, :holding_register, 1)
       assert mapping.name == :foo
       assert mapping.type == :holding_register
-      assert mapping.addresses == 1..1
       assert mapping.starting_address == 1
       assert mapping.address_count == 1
       assert mapping.mode == :r
@@ -17,7 +16,6 @@ defmodule ModBoss.MappingTest do
       mapping = Mapping.new(__MODULE__, :bar, :coil, 1..5, mode: :rw)
       assert mapping.name == :bar
       assert mapping.type == :coil
-      assert mapping.addresses == 1..5
       assert mapping.starting_address == 1
       assert mapping.address_count == 5
       assert mapping.mode == :rw
@@ -49,6 +47,14 @@ defmodule ModBoss.MappingTest do
       mapping = Mapping.new(__MODULE__, :foo, :holding_register, 1)
       assert {ModBoss.Encoding, :raw} = mapping.as
     end
+  end
+
+  describe "address_range/1" do
+    mapping = Mapping.new(__MODULE__, :foo, :holding_register, 3)
+    assert 3..3 = Mapping.address_range(mapping)
+
+    mapping = Mapping.new(__MODULE__, :foo, :holding_register, 27..31)
+    assert 27..31 = Mapping.address_range(mapping)
   end
 
   describe "readable?/1" do

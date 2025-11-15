@@ -245,7 +245,8 @@ defmodule ModBoss.Schema do
     duplicate_addresses =
       mappings
       |> Enum.flat_map(fn mapping ->
-        mapping.addresses
+        mapping
+        |> Mapping.address_range()
         |> Enum.to_list()
         |> Enum.map(&{mapping.type, &1})
       end)
