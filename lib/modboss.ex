@@ -363,24 +363,12 @@ defmodule ModBoss do
   defp get_encode_mfa(%Mapping{as: {module, as}} = mapping) do
     function = String.to_atom("encode_" <> "#{as}")
 
-    # In an effort to keep the API simple, when we call a user-defined encode function,
-    # we only pass the value to be encoded.
-    #
-    # However, when calling built-in encoding functions, we pass both the value to be encoded
-    # _and_ the mapping. We do this because in some cases we need to know how many objects
-    # we're encoding for in order to provide truly generic encoders. For example, when encoding
-    # a string to ASCII, we may need to add padding to fill out the mapped objects.
-    arguments =
-      case module do
-        ModBoss.Encoding -> [mapping.value, mapping]
-        _other -> [mapping.value]
-      end
-
-    if exists?(module, function, length(arguments)) do
-      {module, function, arguments}
+    if exists?(module, function, 2) do
+      metadata = ModBoss.Encoding.Metadata.from_mapping(mapping)
+      {module, function, [mapping.value, metadata]}
     else
       {:error,
-       "Modbus mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."}
+       "Expected #{inspect(module)}.#{function}/2 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
     end
   end
 
@@ -409,13 +397,12 @@ defmodule ModBoss do
 
   defp get_decode_mfa(%Mapping{as: {module, as}} = mapping) do
     function = String.to_atom("decode_" <> "#{as}")
-    arguments = [mapping.encoded_value]
 
-    if exists?(module, function, length(arguments)) do
-      {module, function, arguments}
+    if exists?(module, function, 1) do
+      {module, function, [mapping.encoded_value]}
     else
       {:error,
-       "Modbus mapping #{inspect(mapping.name)} expected #{inspect(module)} to define #{inspect(function)}, but it did not."}
+       "Expected #{inspect(module)}.#{function}/1 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
     end
   end
 

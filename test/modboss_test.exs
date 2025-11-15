@@ -518,8 +518,8 @@ defmodule ModBossTest do
           holding_register 3..5, :text, as: {Encoding, :ascii}, mode: :w
         end
 
-        def encode_boolean(false), do: {:ok, 0}
-        def encode_boolean(true), do: {:ok, 1}
+        def encode_boolean(false, _), do: {:ok, 0}
+        def encode_boolean(true, _), do: {:ok, 1}
       end
       """)
 

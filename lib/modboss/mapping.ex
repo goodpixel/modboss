@@ -3,12 +3,15 @@ defmodule ModBoss.Mapping do
   Struct representing the Modbus mapping.
   """
 
+  @type name() :: atom()
+  @type type() :: :holding_register | :input_register | :coil | :discrete_input
+
   @type t() :: %__MODULE__{
-          name: atom(),
-          type: :holding_register | :input_register | :coil | :discrete_input,
+          name: name(),
+          type: type(),
           addresses: Range.t(),
-          starting_address: integer(),
-          address_count: integer(),
+          starting_address: non_neg_integer(),
+          address_count: pos_integer(),
           as: atom() | {module(), atom()},
           value: any(),
           encoded_value: integer() | [integer()],
