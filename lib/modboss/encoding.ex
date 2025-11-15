@@ -17,9 +17,8 @@ defmodule ModBoss.Encoding do
   when providing your own `encode_*` functions, you'll only be passed the value to be encoded
   (and not the mapping).
   """
-  alias ModBoss.Mapping
-
   import Bitwise
+  alias ModBoss.Encoding.Metadata
 
   @doc false
   def encode_raw(value_or_values, _), do: {:ok, value_or_values}
@@ -38,9 +37,9 @@ defmodule ModBoss.Encoding do
       iex> encode_boolean(false, %{})
       {:ok, 0}
   """
-  @spec encode_boolean(boolean(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
-  def encode_boolean(true, _mapping), do: {:ok, 1}
-  def encode_boolean(false, _mapping), do: {:ok, 0}
+  @spec encode_boolean(boolean(), Metadata.t()) :: {:ok, integer()} | {:error, binary()}
+  def encode_boolean(true, _meta), do: {:ok, 1}
+  def encode_boolean(false, _meta), do: {:ok, 0}
 
   @doc """
   Interpret `1` as `true` and `0` as `false`
@@ -70,12 +69,12 @@ defmodule ModBoss.Encoding do
       iex> {:ok, 65_535} = encode_unsigned_int(65_535, %{})
       iex> {:error, _too_large} = encode_unsigned_int(65_536, %{})
   """
-  @spec encode_unsigned_int(integer(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
-  def encode_unsigned_int(value, _mapping) when value >= 0 and value <= 65_535 do
+  @spec encode_unsigned_int(integer(), Metadata.t()) :: {:ok, integer()} | {:error, binary()}
+  def encode_unsigned_int(value, _meta) when value >= 0 and value <= 65_535 do
     {:ok, value}
   end
 
-  def encode_unsigned_int(value, _mapping) do
+  def encode_unsigned_int(value, _meta) do
     {:error, "Value #{value} is outside the range of a 16-bit unsigned integer (0 to 65,535)"}
   end
 
@@ -106,13 +105,13 @@ defmodule ModBoss.Encoding do
       iex> {:ok, -32_768} = encode_signed_int(-32_768, %{})
       iex> {:error, _too_large} = encode_signed_int(32_768, %{})
   """
-  @spec encode_signed_int(integer(), Mapping.t()) :: {:ok, integer()} | {:error, binary()}
-  def encode_signed_int(value, _mapping)
+  @spec encode_signed_int(integer(), Metadata.t()) :: {:ok, integer()} | {:error, binary()}
+  def encode_signed_int(value, _meta)
       when is_integer(value) and value >= -32768 and value <= 32767 do
     {:ok, value}
   end
 
-  def encode_signed_int(value, _mapping) do
+  def encode_signed_int(value, _meta) do
     {:error, "Value #{value} is outside the range of a 16-bit signed integer (-32768 to 32767)"}
   end
 
@@ -143,34 +142,32 @@ defmodule ModBoss.Encoding do
 
   ## Examples
 
-      iex> encode_ascii("Hi!", %ModBoss.Mapping{address_count: 3})
+      iex> metadata = %ModBoss.Encoding.Metadata{type: :holding_register, address_count: 3}
+      iex> encode_ascii("Hi!", metadata)
       {:ok, [18537, 8448, 0]}
 
-      iex> {:error, _too_many_characters} = encode_ascii("Hi!", %ModBoss.Mapping{address_count: 1})
+      iex> metadata = %ModBoss.Encoding.Metadata{type: :holding_register, address_count: 1}
+      iex> {:error, reason} = encode_ascii("Hi!", metadata)
+      iex> String.match?(reason, ~r/Too many characters/)
+      true
   """
-  @spec encode_ascii(binary(), Mapping.t()) :: {:ok, list(integer())} | {:error, binary()}
-  def encode_ascii(text, %Mapping{} = mapping) do
-    with :ok <- verify_ascii(text),
+  @spec encode_ascii(binary(), Metadata.t()) :: {:ok, list(integer())} | {:error, binary()}
+  def encode_ascii(text, %Metadata{type: :holding_register} = meta) when is_binary(text) do
+    with :ok <- verify_ascii(text, meta),
          {:ok, chars} <- get_chars(text),
-         {:ok, padded_chars} <- pad(chars, mapping) do
-      do_encode_ascii(padded_chars)
+         {:ok, padded_chars} <- pad(chars, text, meta),
+         registers <- chars_to_registers(padded_chars) do
+      {:ok, registers}
     end
   end
 
-  defp do_encode_ascii(chars) when is_list(chars) do
-    chars
-    |> Enum.chunk_every(2, 2)
-    |> Enum.map(fn [upper_byte, lower_byte] -> (upper_byte <<< 8) + lower_byte end)
-    |> then(&{:ok, &1})
-  end
-
-  defp verify_ascii(text) do
+  defp verify_ascii(text, %Metadata{name: name}) do
     text
     |> String.to_charlist()
     |> Enum.all?(fn c -> c >= 0 and c < 127 end)
     |> case do
       true -> :ok
-      false -> {:error, "Text contains non-ASCII characters."}
+      false -> {:error, "Non-ASCII characters in #{text} for ModBoss mapping #{inspect(name)}."}
     end
   end
 
@@ -178,20 +175,26 @@ defmodule ModBoss.Encoding do
     {:ok, :binary.bin_to_list(text)}
   end
 
-  defp pad(chars, mapping) do
-    max_chars = mapping.address_count * 2
+  defp pad(chars, text, %Metadata{name: name, address_count: address_count}) do
+    max_chars = address_count * 2
     pad_count = max_chars - length(chars)
 
     if pad_count < 0 do
       message = """
-      Text for #{inspect(mapping.name)} contains too many characters. \
-      With #{mapping.address_count} registers, it can hold up to #{max_chars} ASCII characters.\
+      Too many characters in #{inspect(text)} for ModBoss mapping #{inspect(name)}. \
+      With #{address_count} registers, it can hold up to #{max_chars} ASCII characters.\
       """
 
       {:error, message}
     else
       {:ok, chars ++ List.duplicate(0, pad_count)}
     end
+  end
+
+  defp chars_to_registers(chars) when is_list(chars) and rem(length(chars), 2) == 0 do
+    chars
+    |> Enum.chunk_every(2, 2)
+    |> Enum.map(fn [upper_byte, lower_byte] -> (upper_byte <<< 8) + lower_byte end)
   end
 
   @doc """
