@@ -84,7 +84,7 @@ defmodule ModBoss do
   end
 
   defp readable_mappings(module) do
-    module.__modbus_schema__()
+    module.__modboss_schema__()
     |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
     |> Enum.map(fn {name, _mapping} -> name end)
   end
@@ -190,7 +190,7 @@ defmodule ModBoss do
 
   @spec get_mappings(mode(), module(), list()) :: {:ok, [Mapping.t()]} | {:error, String.t()}
   defp get_mappings(mode, module, mapping_names) when is_list(mapping_names) do
-    schema = module.__modbus_schema__()
+    schema = module.__modboss_schema__()
 
     {mappings, unknown_names} =
       mapping_names

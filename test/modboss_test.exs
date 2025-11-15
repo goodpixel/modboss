@@ -4,7 +4,7 @@ defmodule ModBossTest do
   defmodule FakeSchema do
     use ModBoss.Schema
 
-    modbus_schema do
+    schema do
       holding_register 1, :foo
       holding_register 2, :bar, mode: :r
       holding_register 3, :baz, mode: :w
@@ -82,7 +82,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1..124, :holding_1
           holding_register 125, :holding_125
           holding_register 126, :holding_126
@@ -171,7 +171,7 @@ defmodule ModBossTest do
             discrete_inputs: #{max_discrete_input_reads}
           ]
 
-        modbus_schema do
+        schema do
           holding_register 1, :holding_foo
           holding_register 2, :holding_bar
           holding_register 3, :holding_baz
@@ -251,7 +251,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1..2, :holding_1
 
           coil 101, :coil_1
@@ -302,7 +302,7 @@ defmodule ModBossTest do
         use ModBoss.Schema
         alias ModBoss.Encoding
 
-        modbus_schema do
+        schema do
           # Assumes the function lives in the current module…
           holding_register 1, :yep, as: :boolean
           holding_register 2, :nope, as: :boolean
@@ -337,7 +337,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           # Assumes the function lives in the current module…
           holding_register 1, :yep, as: :boolean
           holding_register 2, :nope, as: :boolean
@@ -368,7 +368,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1, :yep, as: :boolean
           holding_register 2, :nope, as: :boolean
           holding_register 3..5, :text, as: {ModBoss.Encoding, :ascii}
@@ -403,7 +403,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1, :yep, as: :boolean
           holding_register 2, :nope, as: :boolean
         end
@@ -431,7 +431,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1..2, :foo
           input_register 300, :bar
           coil 400, :baz
@@ -509,7 +509,7 @@ defmodule ModBossTest do
         use ModBoss.Schema
         alias ModBoss.Encoding
 
-        modbus_schema do
+        schema do
           # Assumes the function lives in the current module…
           holding_register 1, :yep, as: :boolean, mode: :w
           holding_register 2, :nope, as: :boolean, mode: :w
@@ -551,7 +551,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1..122, :holding_1, mode: :w
           holding_register 123, :holding_123, mode: :w
           holding_register 124, :holding_124, mode: :w
@@ -591,7 +591,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1, :holding_1, mode: :w
           holding_register 2, :holding_2, mode: :w
 
@@ -618,7 +618,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema, max_batch_writes: %{holding_registers: 2, coils: 2}
 
-        modbus_schema do
+        schema do
           holding_register 1, :holding_foo, mode: :w
           holding_register 2..3, :holding_bar, mode: :w
           holding_register 4, :holding_baz, mode: :w
@@ -661,7 +661,7 @@ defmodule ModBossTest do
         use ModBoss.Schema
         alias ModBoss.Encoding
 
-        modbus_schema do
+        schema do
           holding_register 1, :foo, as: {Encoding, :boolean}
           holding_register 2, :bar, as: {Encoding, :boolean}
           holding_register 3..4, :baz, as: {Encoding, :ascii}
@@ -700,7 +700,7 @@ defmodule ModBossTest do
         use ModBoss.Schema
         alias ModBoss.Encoding
 
-        modbus_schema do
+        schema do
           holding_register 1, :foo, as: {Encoding, :boolean}
           holding_register 2, :bar, as: {Encoding, :boolean}
           holding_register 3..4, :baz, as: {Encoding, :ascii}
@@ -738,7 +738,7 @@ defmodule ModBossTest do
       defmodule #{schema} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1, :foo
           holding_register 2, :bar
         end

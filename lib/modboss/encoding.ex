@@ -10,7 +10,7 @@ defmodule ModBoss.Encoding do
 
   To use them, pass them along with this module name to the `:as` option. For example:
 
-      modbus_schema do
+      schema do
         holding_register 1..5, :model, as: {ModBoss.Encoding, :ascii}
       end
 

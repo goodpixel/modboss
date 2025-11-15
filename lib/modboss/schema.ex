@@ -75,7 +75,7 @@ defmodule ModBoss.Schema do
       defmodule MyDevice.Schema do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1..5, :model, as: {ModBoss.Encoding, :ascii}
           holding_register 6, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
           holding_register 7, :indoor_temp, as: {ModBoss.Encoding, :unsigned_int}
@@ -100,7 +100,7 @@ defmodule ModBoss.Schema do
     max_writes = Keyword.get(opts, :max_batch_writes, [])
 
     quote do
-      import unquote(__MODULE__), only: [modbus_schema: 1]
+      import unquote(__MODULE__), only: [schema: 1]
 
       Module.register_attribute(__MODULE__, :modboss_mappings, accumulate: true)
       Module.put_attribute(__MODULE__, :max_reads_per_batch, unquote(max_reads))
@@ -113,7 +113,7 @@ defmodule ModBoss.Schema do
   @doc """
   Establishes a Modbus schema in the current module.
   """
-  defmacro modbus_schema(do: block) do
+  defmacro schema(do: block) do
     quote do
       (fn ->
          import unquote(__MODULE__),
@@ -287,7 +287,7 @@ defmodule ModBoss.Schema do
       def __max_batch__(:write, :holding_register), do: unquote(max_holding_register_writes)
       def __max_batch__(:write, :coil), do: unquote(max_coil_writes)
 
-      def __modbus_schema__, do: unquote(mappings)
+      def __modboss_schema__, do: unquote(mappings)
     end
   end
 end

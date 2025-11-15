@@ -4,7 +4,7 @@ defmodule ModBoss.SchemaTest do
   defmodule ExampleSchema do
     use ModBoss.Schema
 
-    modbus_schema do
+    schema do
       holding_register 1, :foo_holding_register
       holding_register 2, :bar_holding_register, mode: :r
       holding_register 3, :baz_holding_register, mode: :rw
@@ -43,7 +43,7 @@ defmodule ModBoss.SchemaTest do
         defmodule #{unique_module()} do
           use ModBoss.Schema
 
-          modbus_schema do
+          schema do
             holding_register 1, :foo
             holding_register 2, :foo
           end
@@ -58,7 +58,7 @@ defmodule ModBoss.SchemaTest do
       defmodule #{unique_module()} do
         use ModBoss.Schema
 
-        modbus_schema do
+        schema do
           holding_register 1, :foo
           input_register 1, :bar
           coil 1, :baz
@@ -76,7 +76,7 @@ defmodule ModBoss.SchemaTest do
         defmodule #{unique_module()} do
           use ModBoss.Schema
 
-          modbus_schema do
+          schema do
             holding_register 1, :nope
             holding_register 1, :nah
             coil 1, :okay
@@ -95,7 +95,7 @@ defmodule ModBoss.SchemaTest do
           defmodule #{unique_module()} do
             use ModBoss.Schema
 
-            modbus_schema do
+            schema do
               #{object_type} 1, :all
             end
           end
@@ -116,7 +116,7 @@ defmodule ModBoss.SchemaTest do
                defmodule #{unique_module()} do
                  use ModBoss.Schema
 
-                 modbus_schema do
+                 schema do
                    holding_register 1, :foo, mode: #{inspect(mode)}
                  end
                end
@@ -137,7 +137,7 @@ defmodule ModBoss.SchemaTest do
           defmodule #{unique_module()} do
             use ModBoss.Schema
 
-            modbus_schema do
+            schema do
               input_register 1, :foo, mode: #{inspect(mode)}
             end
           end
@@ -158,7 +158,7 @@ defmodule ModBoss.SchemaTest do
                defmodule #{unique_module()} do
                  use ModBoss.Schema
 
-                 modbus_schema do
+                 schema do
                    coil 1, :foo, mode: #{inspect(mode)}
                  end
                end
@@ -179,7 +179,7 @@ defmodule ModBoss.SchemaTest do
           defmodule #{unique_module()} do
             use ModBoss.Schema
 
-            modbus_schema do
+            schema do
               discrete_input 1, :foo, mode: #{inspect(mode)}
             end
           end
@@ -194,6 +194,6 @@ defmodule ModBoss.SchemaTest do
   end
 
   defp mapping(module, name) do
-    module.__modbus_schema__() |> Map.fetch!(name)
+    module.__modboss_schema__() |> Map.fetch!(name)
   end
 end
