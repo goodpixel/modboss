@@ -254,11 +254,12 @@ defmodule ModBoss do
     mappings
     |> chunk_mappings(module, :read)
     |> Enum.map(fn [first | _rest] = chunk ->
-      initial_acc = {first.type, first.starting_address, 0}
+      last = List.last(chunk)
+      starting_address = first.starting_address
+      ending_address = last.starting_address + last.address_count - 1
+      address_count = ending_address - starting_address + 1
 
-      Enum.reduce(chunk, initial_acc, fn mapping, {type, starting_address, address_count} ->
-        {type, starting_address, address_count + mapping.address_count}
-      end)
+      {first.type, starting_address, address_count}
     end)
     |> Enum.reduce_while({:ok, %{}}, fn batch, {:ok, acc} ->
       case read_batch(read_func, batch) do
@@ -315,21 +316,26 @@ defmodule ModBoss do
   defp chunk_mappings(mappings, module, mode) do
     chunk_fun = fn %Mapping{type: type, starting_address: address} = mapping, acc ->
       max_chunk = module.__max_batch__(mode, type)
+      max_gap = if mode == :read, do: module.__max_gap__(type), else: 0
+
+      if mapping.address_count > max_chunk do
+        raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
+      end
 
       case acc do
-        {[], 0} when mapping.address_count <= max_chunk ->
+        {[], 0} ->
           {:cont, {[mapping], mapping.address_count}}
 
-        {[prior | _] = mappings, count}
-        when prior.starting_address + prior.address_count == address and
-               count + mapping.address_count <= max_chunk ->
-          {:cont, {[mapping | mappings], count + mapping.address_count}}
+        {[prior | _] = mappings, count} ->
+          gap = address - (prior.starting_address + prior.address_count)
+          total_with_gap = count + gap + mapping.address_count
+          fits_in_current_chunk = gap <= max_gap and total_with_gap <= max_chunk
 
-        {mappings, _count} when mapping.address_count <= max_chunk ->
-          {:cont, Enum.reverse(mappings), {[mapping], mapping.address_count}}
-
-        {_, _} when mapping.address_count > max_chunk ->
-          raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
+          if fits_in_current_chunk do
+            {:cont, {[mapping | mappings], total_with_gap}}
+          else
+            {:cont, Enum.reverse(mappings), {[mapping], mapping.address_count}}
+          end
       end
     end
 
