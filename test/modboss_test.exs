@@ -26,6 +26,19 @@ defmodule ModBossTest do
     end
   end
 
+  defmodule SchemaWithGapTolerance do
+    use ModBoss.Schema,
+      max_gaps: [
+        holding_registers: 10
+      ]
+
+    schema do
+      holding_register 0..5, :first_group
+      holding_register 12..23, :second_group
+      holding_register 36..37, :third_group
+    end
+  end
+
   @initial_state %{
     reads: 0,
     writes: 0,
@@ -749,6 +762,52 @@ defmodule ModBossTest do
       assert String.match?(message, ~r/Unknown mapping/i)
 
       assert {:ok, _encoded_values} = ModBoss.encode(schema, %{foo: 1, bar: 2})
+    end
+  end
+
+  describe "gap tolerance" do
+    test "batches mappings with gaps when max_gap is configured" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      # Set up values for addresses 0-37 (including gaps)
+      # The gaps (6-11 and 24-35) will be read but discarded
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      # Read all mappings
+      {:ok, result} =
+        ModBoss.read(SchemaWithGapTolerance, read_func(device), [
+          :first_group,
+          :second_group,
+          :third_group
+        ])
+
+      # Should make 2 requests:
+      # 1. Addresses 0-23 (combines first_group and second_group with gap of 6)
+      # 2. Addresses 36-37 (gap of 12 is too large to combine with previous)
+      assert 2 = get_read_count(device)
+
+      # Verify correct values were read
+      assert result[:first_group] == [0, 1, 2, 3, 4, 5]
+      assert result[:second_group] == [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+      assert result[:third_group] == [36, 37]
+    end
+
+    test "without gap tolerance, makes separate requests for each non-contiguous mapping" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      values = Enum.into(1..15, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      # Using FakeSchema which has no gap tolerance
+      # :foo is at address 1, :qux is at addresses 10-12 (gap of 8 registers)
+      {:ok, _result} =
+        ModBoss.read(FakeSchema, read_func(device), [:foo, :qux])
+
+      # Should make 2 separate requests since they're not contiguous
+      assert 2 = get_read_count(device)
     end
   end
 
