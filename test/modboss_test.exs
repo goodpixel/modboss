@@ -34,8 +34,8 @@ defmodule ModBossTest do
 
     schema do
       holding_register 0..5, :first_group
-      holding_register 12..23, :second_group
-      holding_register 36..37, :third_group
+      holding_register 16..23, :second_group
+      holding_register 35..37, :third_group
     end
   end
 
@@ -770,7 +770,7 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       # Set up values for addresses 0-37 (including gaps)
-      # The gaps (6-11 and 24-35) will be read but discarded
+      # The gaps (6-15 and 24-34) will be read but discarded
       values = Enum.into(0..37, %{}, fn i -> {i, i} end)
 
       set_objects(device, values)
@@ -784,14 +784,14 @@ defmodule ModBossTest do
         ])
 
       # Should make 2 requests:
-      # 1. Addresses 0-23 (combines first_group and second_group with gap of 6)
-      # 2. Addresses 36-37 (gap of 12 is too large to combine with previous)
+      # 1. Addresses 0-23 (combines first_group and second_group with gap of exactly 10)
+      # 2. Addresses 35-37 (gap of 11 is too large to combine with previous)
       assert 2 = get_read_count(device)
 
       # Verify correct values were read
       assert result[:first_group] == [0, 1, 2, 3, 4, 5]
-      assert result[:second_group] == [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
-      assert result[:third_group] == [36, 37]
+      assert result[:second_group] == [16, 17, 18, 19, 20, 21, 22, 23]
+      assert result[:third_group] == [35, 36, 37]
     end
 
     test "without gap tolerance, makes separate requests for each non-contiguous mapping" do
