@@ -318,27 +318,24 @@ defmodule ModBoss do
       max_chunk = module.__max_batch__(mode, type)
       max_gap = if mode == :read, do: module.__max_gap__(type), else: 0
 
+      if mapping.address_count > max_chunk do
+        raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
+      end
+
       case acc do
-        {[], 0} when mapping.address_count <= max_chunk ->
+        {[], 0} ->
           {:cont, {[mapping], mapping.address_count}}
 
         {[prior | _] = mappings, count} ->
           gap = address - (prior.starting_address + prior.address_count)
           total_with_gap = count + gap + mapping.address_count
+          fits_in_current_chunk = gap <= max_gap and total_with_gap <= max_chunk
 
-          cond do
-            gap >= 0 and gap <= max_gap and total_with_gap <= max_chunk ->
-              {:cont, {[mapping | mappings], total_with_gap}}
-
-            mapping.address_count <= max_chunk ->
-              {:cont, Enum.reverse(mappings), {[mapping], mapping.address_count}}
-
-            true ->
-              raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
+          if fits_in_current_chunk do
+            {:cont, {[mapping | mappings], total_with_gap}}
+          else
+            {:cont, Enum.reverse(mappings), {[mapping], mapping.address_count}}
           end
-
-        {_mappings, _count} when mapping.address_count > max_chunk ->
-          raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
       end
     end
 
