@@ -30,25 +30,6 @@ defmodule ModBoss.Schema do
   All ModBoss mappings are read-only by default. Use `mode: :rw` to allow both
   reads & writes. Or use `mode: :w` to configure a mapping as write-only.
 
-  ## Gap Tolerance
-
-  By default, ModBoss only batches mappings that are perfectly contiguous. You can
-  configure gap tolerance to allow ModBoss to batch mappings with small gaps between
-  them, reducing the number of Modbus requests. Unmapped addresses within the gap
-  will be read but discarded.
-
-  Configure gap tolerance per object type using the `max_gaps` option:
-
-      use ModBoss.Schema,
-        max_gaps: [
-          holding_registers: 10,
-          input_registers: 10
-        ]
-
-  With a gap tolerance of 10, if you have mappings at registers 0-5 and 12-15,
-  ModBoss will read registers 0-15 in a single request (including the gap of 6
-  registers from 6-11), rather than making two separate requests.
-
   ## Automatic encoding/decoding
 
   Depending on whether a mapping is flagged as readable/writable, it is expected
@@ -117,7 +98,6 @@ defmodule ModBoss.Schema do
   defmacro __using__(opts) do
     max_reads = Keyword.get(opts, :max_batch_reads, [])
     max_writes = Keyword.get(opts, :max_batch_writes, [])
-    max_gaps = Keyword.get(opts, :max_gaps, [])
 
     quote do
       import unquote(__MODULE__), only: [schema: 1]
@@ -125,7 +105,6 @@ defmodule ModBoss.Schema do
       Module.register_attribute(__MODULE__, :modboss_mappings, accumulate: true)
       Module.put_attribute(__MODULE__, :max_reads_per_batch, unquote(max_reads))
       Module.put_attribute(__MODULE__, :max_writes_per_batch, unquote(max_writes))
-      Module.put_attribute(__MODULE__, :max_gaps_per_batch, unquote(max_gaps))
 
       @before_compile unquote(__MODULE__)
     end
@@ -245,7 +224,6 @@ defmodule ModBoss.Schema do
   defmacro __before_compile__(env) do
     max_reads = Module.get_attribute(env.module, :max_reads_per_batch)
     max_writes = Module.get_attribute(env.module, :max_writes_per_batch)
-    max_gaps = Module.get_attribute(env.module, :max_gaps_per_batch)
 
     max_holding_register_reads = max_reads[:holding_registers] || 125
     max_input_register_reads = max_reads[:input_registers] || 125
@@ -254,11 +232,6 @@ defmodule ModBoss.Schema do
 
     max_holding_register_writes = max_writes[:holding_registers] || 123
     max_coil_writes = max_writes[:coils] || 1968
-
-    max_holding_register_gap = max_gaps[:holding_registers] || 0
-    max_input_register_gap = max_gaps[:input_registers] || 0
-    max_coil_gap = max_gaps[:coils] || 0
-    max_discrete_input_gap = max_gaps[:discrete_inputs] || 0
     mappings = Module.get_attribute(env.module, :modboss_mappings)
 
     duplicate_names =
@@ -313,11 +286,6 @@ defmodule ModBoss.Schema do
 
       def __max_batch__(:write, :holding_register), do: unquote(max_holding_register_writes)
       def __max_batch__(:write, :coil), do: unquote(max_coil_writes)
-
-      def __max_gap__(:holding_register), do: unquote(max_holding_register_gap)
-      def __max_gap__(:input_register), do: unquote(max_input_register_gap)
-      def __max_gap__(:coil), do: unquote(max_coil_gap)
-      def __max_gap__(:discrete_input), do: unquote(max_discrete_input_gap)
 
       def __modboss_schema__, do: unquote(mappings)
     end

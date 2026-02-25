@@ -1,5 +1,6 @@
 defmodule ModBossTest do
   use ExUnit.Case
+  import ExUnit.CaptureLog
 
   defmodule FakeSchema do
     use ModBoss.Schema
@@ -26,11 +27,8 @@ defmodule ModBossTest do
     end
   end
 
-  defmodule SchemaWithGapTolerance do
-    use ModBoss.Schema,
-      max_gaps: [
-        holding_registers: 10
-      ]
+  defmodule SchemaWithGaps do
+    use ModBoss.Schema
 
     schema do
       holding_register 0..5, :first_group
@@ -766,7 +764,29 @@ defmodule ModBossTest do
   end
 
   describe "gap tolerance" do
-    test "batches mappings with gaps when max_gap is configured" do
+    test "without max_gap, makes separate requests for each non-contiguous mapping" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      {:ok, _result} =
+        ModBoss.read(
+          SchemaWithGaps,
+          read_func(device),
+          [
+            :first_group,
+            :second_group,
+            :third_group
+          ]
+        )
+
+      # Should make 2 separate requests since they're not contiguous
+      assert 3 = get_read_count(device)
+    end
+
+    test "batches mappings with gaps when max_gap scalar is specified" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       # Set up values for addresses 0-37 (including gaps)
@@ -775,13 +795,17 @@ defmodule ModBossTest do
 
       set_objects(device, values)
 
-      # Read all mappings
       {:ok, result} =
-        ModBoss.read(SchemaWithGapTolerance, read_func(device), [
-          :first_group,
-          :second_group,
-          :third_group
-        ])
+        ModBoss.read(
+          SchemaWithGaps,
+          read_func(device),
+          [
+            :first_group,
+            :second_group,
+            :third_group
+          ],
+          max_gap: 10
+        )
 
       # Should make 2 requests:
       # 1. Addresses 0-23 (combines first_group and second_group with gap of exactly 10)
@@ -794,19 +818,99 @@ defmodule ModBossTest do
       assert result[:third_group] == [35, 36, 37]
     end
 
-    test "without gap tolerance, makes separate requests for each non-contiguous mapping" do
+    test "accepts keyword list for max_gap" do
       device = start_supervised!({Agent, fn -> @initial_state end})
-
-      values = Enum.into(1..15, %{}, fn i -> {i, i} end)
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
 
       set_objects(device, values)
 
-      # Using FakeSchema which has no gap tolerance
-      # :foo is at address 1, :qux is at addresses 10-12 (gap of 8 registers)
       {:ok, _result} =
-        ModBoss.read(FakeSchema, read_func(device), [:foo, :qux])
+        ModBoss.read(
+          SchemaWithGaps,
+          read_func(device),
+          [:first_group, :second_group, :third_group],
+          max_gap: [holding_registers: 10]
+        )
 
-      # Should make 2 separate requests since they're not contiguous
+      assert 2 = get_read_count(device)
+    end
+
+    test "accepts map for max_gap" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      {:ok, _result} =
+        ModBoss.read(
+          SchemaWithGaps,
+          read_func(device),
+          [:first_group, :second_group, :third_group],
+          max_gap: %{holding_registers: 10}
+        )
+
+      assert 2 = get_read_count(device)
+    end
+
+    test "logs a warning and uses the default gap size when unrecognized gap size keys are used" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      # max_gap as a map
+      assert capture_log(fn ->
+               ModBoss.read(
+                 SchemaWithGaps,
+                 read_func(device),
+                 [:first_group, :second_group],
+                 max_gap: %{foo: 1}
+               )
+             end) =~ "Invalid :foo gap size specified"
+
+      assert 2 = get_read_count(device)
+
+      # max_gap as a keyword list
+      assert capture_log(fn ->
+               ModBoss.read(
+                 SchemaWithGaps,
+                 read_func(device),
+                 [:first_group, :second_group],
+                 max_gap: [bar: 10]
+               )
+             end) =~ "Invalid :bar gap size specified"
+
+      assert 2 = get_read_count(device)
+    end
+
+    test "logs a warning and uses the default gap size when provided value is not an integer" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      # max_gap as a map
+      assert capture_log(fn ->
+               ModBoss.read(
+                 SchemaWithGaps,
+                 read_func(device),
+                 [:first_group, :second_group],
+                 max_gap: %{holding_registers: "nope", input_registers: 3.14159}
+               )
+             end) =~ "Invalid max gap size"
+
+      assert 2 = get_read_count(device)
+
+      # max_gap as a keyword list
+      assert capture_log(fn ->
+               ModBoss.read(
+                 SchemaWithGaps,
+                 read_func(device),
+                 [:first_group, :second_group],
+                 max_gap: [holding_registers: {:yikes}]
+               )
+             end) =~ "Invalid max gap size"
+
       assert 2 = get_read_count(device)
     end
   end
