@@ -515,22 +515,25 @@ defmodule ModBossTest do
         use ModBoss.Schema
 
         schema do
-          holding_register 0..1, :first_group
-          holding_register 3..5, :filler
-          holding_register 7..8, :second_group
+          holding_register 0..1, :group_1
+          holding_register 2..3, :filler
+          holding_register 4..5, :group_2
         end
       end
       """)
 
       device = start_supervised!({Agent, fn -> @initial_state end})
 
-      values = Enum.into(0..8, %{}, fn i -> {{:holding_register, i}, i} end)
+      values = Enum.into(0..5, %{}, fn i -> {{:holding_register, i}, i} end)
       set_objects(device, values)
 
-      {:ok, _result} = ModBoss.read(schema, read_func(device), [:first_group, :second_group])
-
       # Should make 2 separate requests since they're not contiguous
+      {:ok, _} = ModBoss.read(schema, read_func(device), [:group_1, :group_2])
       assert 2 = get_read_count(device)
+
+      # Should make 1 request if we're okay reading across the gap
+      {:ok, _} = ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 2)
+      assert 1 = get_read_count(device)
     end
 
     test "accepts `:max_gap` scalar to batch reads across (known readable) unrequested mappings" do
@@ -569,9 +572,11 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
 
       # Verify correct values were read
-      assert result[:first_group] == [0, 1, 2, 3, 4, 5]
-      assert result[:second_group] == [16, 17, 18, 19, 20, 21, 22, 23]
-      assert result[:third_group] == [35, 36, 37]
+      assert %{
+               first_group: [0, 1, 2, 3, 4, 5],
+               second_group: [16, 17, 18, 19, 20, 21, 22, 23],
+               third_group: [35, 36, 37]
+             } = result
     end
 
     test "also accepts `:max_gap` as keyword list" do
@@ -604,9 +609,11 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
 
       # Verify correct values were read
-      assert result[:first_group] == [0, 1, 2, 3, 4, 5]
-      assert result[:second_group] == [16, 17, 18, 19, 20, 21, 22, 23]
-      assert result[:third_group] == [35, 36, 37]
+      assert %{
+               first_group: [0, 1, 2, 3, 4, 5],
+               second_group: [16, 17, 18, 19, 20, 21, 22, 23],
+               third_group: [35, 36, 37]
+             } = result
     end
 
     test "also accepts `:max_gap` as map" do
@@ -639,9 +646,11 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
 
       # Verify correct values were read
-      assert result[:first_group] == [0, 1, 2, 3, 4, 5]
-      assert result[:second_group] == [16, 17, 18, 19, 20, 21, 22, 23]
-      assert result[:third_group] == [35, 36, 37]
+      assert %{
+               first_group: [0, 1, 2, 3, 4, 5],
+               second_group: [16, 17, 18, 19, 20, 21, 22, 23],
+               third_group: [35, 36, 37]
+             } = result
     end
 
     test "supports `:max_gap` for all object types" do
@@ -681,6 +690,7 @@ defmodule ModBossTest do
 
       set_objects(device, values)
 
+      # If gaps are allowed, groups of like objects are batched if possible
       {:ok, result} =
         ModBoss.read(
           schema,
@@ -695,23 +705,45 @@ defmodule ModBossTest do
             :seventh_group,
             :eighth_group
           ],
-          max_gap: 10
+          max_gap: 2
         )
 
       assert 4 = get_read_count(device)
 
       # Verify correct values were read
-      assert result[:first_group] == [0, 1]
-      assert result[:second_group] == [4, 5]
-      assert result[:third_group] == [0, 1]
-      assert result[:fourth_group] == [4, 5]
-      assert result[:fifth_group] == [0, 1]
-      assert result[:sixth_group] == [4, 5]
-      assert result[:seventh_group] == [0, 1]
-      assert result[:eighth_group] == [4, 5]
+      assert %{
+               first_group: [0, 1],
+               second_group: [4, 5],
+               third_group: [0, 1],
+               fourth_group: [4, 5],
+               fifth_group: [0, 1],
+               sixth_group: [4, 5],
+               seventh_group: [0, 1],
+               eighth_group: [4, 5]
+             } = result
+
+      # If gaps aren't allowed, every group is read separately
+      {:ok, ^result} =
+        ModBoss.read(
+          schema,
+          read_func(device),
+          [
+            :first_group,
+            :second_group,
+            :third_group,
+            :fourth_group,
+            :fifth_group,
+            :sixth_group,
+            :seventh_group,
+            :eighth_group
+          ],
+          max_gap: 0
+        )
+
+      assert 8 = get_read_count(device)
     end
 
-    test "logs a warning and uses the default gap size if unsupported keys are used with `max_gap`" do
+    test "logs a warning (but doesn't fail) if unsupported keys are used with `max_gap`" do
       schema = unique_module()
 
       Code.compile_string("""
@@ -752,7 +784,7 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
     end
 
-    test "logs a warning and uses the default gap size when `:max_gap` value is not an integer" do
+    test "logs a warning (but doesn't fail) when values for `:max_gap` are not positive integers" do
       schema = unique_module()
 
       Code.compile_string("""
@@ -760,11 +792,9 @@ defmodule ModBossTest do
         use ModBoss.Schema
 
         schema do
-          holding_register 0..5, :first_group
-          holding_register 6..15, :filler_a
-          holding_register 16..23, :second_group
-          holding_register 24..34, :filler_b
-          holding_register 35..37, :third_group
+          holding_register 0..1, :first_group
+          holding_register 2, :gap
+          holding_register 3..4, :second_group
         end
       end
       """)
@@ -775,20 +805,42 @@ defmodule ModBossTest do
       set_objects(device, values)
 
       # max_gap as a map
-      assert capture_log(fn ->
-               ModBoss.read(schema, read_func(device), [:first_group, :second_group],
-                 max_gap: %{holding_registers: "nope", input_registers: 3.14159}
-               )
-             end) =~ "Invalid max gap size"
+      {_result, log} =
+        with_log(fn ->
+          ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+            max_gap: %{
+              holding_registers: "nope",
+              input_registers: 3.14159,
+              coils: -1,
+              discrete_inputs: nil
+            }
+          )
+        end)
+
+      assert log =~ ~S[Invalid max gap size "nope"]
+      assert log =~ ~S[Invalid max gap size 3.14159]
+      assert log =~ ~S[Invalid max gap size -1]
+      assert log =~ ~S[Invalid max gap size nil]
 
       assert 2 = get_read_count(device)
 
       # max_gap as a keyword list
-      assert capture_log(fn ->
-               ModBoss.read(schema, read_func(device), [:first_group, :second_group],
-                 max_gap: [holding_registers: {:yikes}]
-               )
-             end) =~ "Invalid max gap size"
+      {_result, log} =
+        with_log(fn ->
+          ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+            max_gap: [
+              holding_registers: {:yikes, 1},
+              input_registers: %{},
+              coils: :blurgh,
+              discrete_inputs: [:thing]
+            ]
+          )
+        end)
+
+      assert log =~ ~S[Invalid max gap size {:yikes, 1}]
+      assert log =~ ~S[Invalid max gap size %{}]
+      assert log =~ ~S[Invalid max gap size :blurgh]
+      assert log =~ ~S{Invalid max gap size [:thing]}
 
       assert 2 = get_read_count(device)
     end
@@ -1012,6 +1064,7 @@ defmodule ModBossTest do
 
         schema do
           holding_register 1, :foo, mode: :rw
+          holding_register 2, :filler, mode: :rw
           holding_register 3, :bar, mode: :rw
         end
       end
