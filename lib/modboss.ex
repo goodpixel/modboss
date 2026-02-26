@@ -207,16 +207,8 @@ defmodule ModBoss do
 
     {mappings, unknown_names} =
       mapping_names
-      |> Enum.map(fn name ->
-        case Map.get(schema, name, :unknown) do
-          :unknown -> name
-          mapping -> mapping
-        end
-      end)
-      |> Enum.split_with(fn
-        %Mapping{} -> true
-        _name -> false
-      end)
+      |> Enum.map(&Map.get(schema, &1, &1))
+      |> Enum.split_with(&match?(%Mapping{}, &1))
 
     cond do
       Enum.any?(unknown_names) ->
@@ -328,9 +320,22 @@ defmodule ModBoss do
   @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
           [{Mapping.object_type(), integer(), [any()]}]
   defp chunk_mappings(mappings, module, mode, max_gaps \\ %{}) do
-    chunk_fun = fn %Mapping{type: type, starting_address: address} = mapping, acc ->
-      max_chunk = module.__max_batch__(mode, type)
-      max_gap = if mode == :read, do: Map.fetch!(max_gaps, type), else: 0
+    # Build a set of {type, address} pairs for all readable mapped registers.
+    # During reads, gap tolerance must only bridge gaps where every address
+    # in the gap belongs to a known, readable mapping.
+    readable_addresses =
+      if mode == :read do
+        module.__modboss_schema__()
+        |> Map.values()
+        |> Enum.filter(&Mapping.readable?/1)
+        |> Enum.flat_map(fn mapping ->
+          mapping |> Mapping.address_range() |> Enum.map(&{mapping.type, &1})
+        end)
+        |> MapSet.new()
+      end
+
+    chunk_fun = fn %Mapping{} = mapping, acc ->
+      max_chunk = module.__max_batch__(mode, mapping.type)
 
       if mapping.address_count > max_chunk do
         raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
@@ -340,13 +345,13 @@ defmodule ModBoss do
         {[], 0} ->
           {:cont, {[mapping], mapping.address_count}}
 
-        {[prior | _] = mappings, count} ->
-          gap = address - (prior.starting_address + prior.address_count)
-          total_with_gap = count + gap + mapping.address_count
-          fits_in_current_chunk = gap <= max_gap and total_with_gap <= max_chunk
+        {[prior_mapping | _] = mappings, running_count} ->
+          gap = compute_gap(prior_mapping, mapping)
+          max_gap = if mode == :write, do: 0, else: Map.fetch!(max_gaps, mapping.type)
+          total_addresses = running_count + gap.size + mapping.address_count
 
-          if fits_in_current_chunk do
-            {:cont, {[mapping | mappings], total_with_gap}}
+          if total_addresses <= max_chunk and allow_gap?(gap, mode, max_gap, readable_addresses) do
+            {:cont, {[mapping | mappings], total_addresses}}
           else
             {:cont, Enum.reverse(mappings), {[mapping], mapping.address_count}}
           end
@@ -362,6 +367,24 @@ defmodule ModBoss do
       |> Enum.sort_by(& &1.starting_address)
       |> Enum.chunk_while({[], 0}, chunk_fun, after_fun)
     end)
+  end
+
+  defp compute_gap(%{type: type} = prior, %{type: type} = current) do
+    gap_start = prior.starting_address + prior.address_count
+    gap_end = current.starting_address - 1
+
+    %{
+      size: current.starting_address - gap_start,
+      addresses: MapSet.new(gap_start..gap_end//1, &{current.type, &1})
+    }
+  end
+
+  defp allow_gap?(gap, mode, max_gap, readable_addresses) when mode in [:read, :write] do
+    cond do
+      gap.size == 0 -> true
+      mode == :write -> false
+      mode == :read -> gap.size <= max_gap and MapSet.subset?(gap.addresses, readable_addresses)
+    end
   end
 
   defp normalize_max_gap(size) when is_integer(size) do
@@ -388,7 +411,7 @@ defmodule ModBoss do
       discrete_input: Map.get(sizes, :discrete_inputs, default_size)
     }
     |> Enum.into(%{}, fn
-      {type, size} when is_integer(size) ->
+      {type, size} when is_integer(size) and size >= 0 ->
         {type, size}
 
       {type, value} ->

@@ -27,16 +27,6 @@ defmodule ModBossTest do
     end
   end
 
-  defmodule SchemaWithGaps do
-    use ModBoss.Schema
-
-    schema do
-      holding_register 0..5, :first_group
-      holding_register 16..23, :second_group
-      holding_register 35..37, :third_group
-    end
-  end
-
   @initial_state %{
     reads: 0,
     writes: 0,
@@ -44,7 +34,55 @@ defmodule ModBossTest do
   }
 
   describe "ModBoss.read/4" do
-    test "reads a individual mapping by name, returning a single result" do
+    test "gap tolerance does not read across unmapped registers" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{1 => 11, 3 => 33})
+
+      # Even with a large gap tolerance, unmapped address 2 must prevent batching
+      result = ModBoss.read(schema, read_func(device), [:foo, :baz], max_gap: 10)
+
+      assert 2 = get_read_count(device)
+      assert {:ok, %{foo: 11, baz: 33}} = result
+    end
+
+    test "gap tolerance does not read across write-only registers" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :bar, mode: :w
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{1 => 11, 3 => 33})
+
+      result = ModBoss.read(schema, read_func(device), [:foo, :baz], max_gap: 10)
+
+      assert 2 = get_read_count(device)
+      assert {:ok, %{foo: 11, baz: 33}} = result
+    end
+
+    test "reads an individual mapping by name, returning a single result" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       set_objects(device, %{1 => 123})
       {:ok, 123} = ModBoss.read(FakeSchema, read_func(device), :foo)
@@ -470,6 +508,287 @@ defmodule ModBossTest do
                qux: 1
              } == result
     end
+
+    test "without `:max_gap` opt, makes separate requests for each non-contiguous mapping" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..1, :first_group
+          holding_register 3..5, :filler
+          holding_register 7..8, :second_group
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      values = Enum.into(0..8, %{}, fn i -> {i, i} end)
+      set_objects(device, values)
+
+      {:ok, _result} = ModBoss.read(schema, read_func(device), [:first_group, :second_group])
+
+      # Should make 2 separate requests since they're not contiguous
+      assert 2 = get_read_count(device)
+    end
+
+    test "accepts `:max_gap` scalar to batch reads across (known readable) unrequested mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..5, :first_group
+          holding_register 6..15, :filler_a
+          holding_register 16..23, :second_group
+          holding_register 24..34, :filler_b
+          holding_register 35..37, :third_group
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      # Set up values for addresses 0-37 (including gaps between requested mappings)
+      # The gaps (6-15 and 24-34) are mapped as readable filler, so gap tolerance can bridge them
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      {:ok, result} =
+        ModBoss.read(schema, read_func(device), [:first_group, :second_group, :third_group],
+          max_gap: 10
+        )
+
+      # Should make 2 requests:
+      # 1. Addresses 0-23 (combines first_group and second_group with gap of exactly 10)
+      # 2. Addresses 35-37 (gap of 11 is too large to combine with previous)
+      assert 2 = get_read_count(device)
+
+      # Verify correct values were read
+      assert result[:first_group] == [0, 1, 2, 3, 4, 5]
+      assert result[:second_group] == [16, 17, 18, 19, 20, 21, 22, 23]
+      assert result[:third_group] == [35, 36, 37]
+    end
+
+    test "also accepts `:max_gap` as keyword list" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..5, :first_group
+          holding_register 6..15, :filler_a
+          holding_register 16..23, :second_group
+          holding_register 24..34, :filler_b
+          holding_register 35..37, :third_group
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      {:ok, result} =
+        ModBoss.read(schema, read_func(device), [:first_group, :second_group, :third_group],
+          max_gap: [holding_registers: 10]
+        )
+
+      assert 2 = get_read_count(device)
+
+      # Verify correct values were read
+      assert result[:first_group] == [0, 1, 2, 3, 4, 5]
+      assert result[:second_group] == [16, 17, 18, 19, 20, 21, 22, 23]
+      assert result[:third_group] == [35, 36, 37]
+    end
+
+    test "also accepts `:max_gap` as map" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..5, :first_group
+          holding_register 6..15, :filler_a
+          holding_register 16..23, :second_group
+          holding_register 24..34, :filler_b
+          holding_register 35..37, :third_group
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      {:ok, result} =
+        ModBoss.read(schema, read_func(device), [:first_group, :second_group, :third_group],
+          max_gap: %{holding_registers: 10}
+        )
+
+      assert 2 = get_read_count(device)
+
+      # Verify correct values were read
+      assert result[:first_group] == [0, 1, 2, 3, 4, 5]
+      assert result[:second_group] == [16, 17, 18, 19, 20, 21, 22, 23]
+      assert result[:third_group] == [35, 36, 37]
+    end
+
+    test "supports `:max_gap` for all object types" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..1, :first_group
+          holding_register 2..3, :filler_a
+          holding_register 4..5, :second_group
+
+          input_register 0..1, :third_group
+          input_register 2..3, :filler_b
+          input_register 4..5, :fourth_group
+
+          coil 0..1, :fifth_group
+          coil 2..3, :filler_c
+          coil 4..5, :sixth_group
+
+          discrete_input 0..1, :seventh_group
+          discrete_input 2..3, :filler_d
+          discrete_input 4..5, :eighth_group
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..5, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      {:ok, result} =
+        ModBoss.read(
+          schema,
+          read_func(device),
+          [
+            :first_group,
+            :second_group,
+            :third_group,
+            :fourth_group,
+            :fifth_group,
+            :sixth_group,
+            :seventh_group,
+            :eighth_group
+          ],
+          max_gap: 10
+        )
+
+      assert 4 = get_read_count(device)
+
+      # Verify correct values were read
+      assert result[:first_group] == [0, 1]
+      assert result[:second_group] == [4, 5]
+      assert result[:third_group] == [0, 1]
+      assert result[:fourth_group] == [4, 5]
+      assert result[:fifth_group] == [0, 1]
+      assert result[:sixth_group] == [4, 5]
+      assert result[:seventh_group] == [0, 1]
+      assert result[:eighth_group] == [4, 5]
+    end
+
+    test "logs a warning and uses the default gap size if unsupported keys are used with `max_gap`" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..5, :first_group
+          holding_register 6..15, :filler_a
+          holding_register 16..23, :second_group
+          holding_register 24..34, :filler_b
+          holding_register 35..37, :third_group
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      # max_gap as a map
+      assert capture_log(fn ->
+               ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+                 max_gap: %{foo: 1}
+               )
+             end) =~ "Invalid :foo gap size specified"
+
+      assert 2 = get_read_count(device)
+
+      # max_gap as a keyword list
+      assert capture_log(fn ->
+               ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+                 max_gap: [bar: 10]
+               )
+             end) =~ "Invalid :bar gap size specified"
+
+      assert 2 = get_read_count(device)
+    end
+
+    test "logs a warning and uses the default gap size when `:max_gap` value is not an integer" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..5, :first_group
+          holding_register 6..15, :filler_a
+          holding_register 16..23, :second_group
+          holding_register 24..34, :filler_b
+          holding_register 35..37, :third_group
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+
+      set_objects(device, values)
+
+      # max_gap as a map
+      assert capture_log(fn ->
+               ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+                 max_gap: %{holding_registers: "nope", input_registers: 3.14159}
+               )
+             end) =~ "Invalid max gap size"
+
+      assert 2 = get_read_count(device)
+
+      # max_gap as a keyword list
+      assert capture_log(fn ->
+               ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+                 max_gap: [holding_registers: {:yikes}]
+               )
+             end) =~ "Invalid max gap size"
+
+      assert 2 = get_read_count(device)
+    end
   end
 
   describe "ModBoss.write/3" do
@@ -661,6 +980,28 @@ defmodule ModBossTest do
 
       assert 3 = get_write_count(device)
     end
+
+    test "doesn't batch writes across address gaps" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo, mode: :rw
+          holding_register 3, :bar, mode: :rw
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      :ok = ModBoss.write(schema, write_func(device), %{foo: 10, bar: 50})
+
+      assert 2 = get_write_count(device)
+      assert %{1 => 10, 3 => 50} = get_registers(device)
+    end
   end
 
   describe "ModBoss.encode/2" do
@@ -760,158 +1101,6 @@ defmodule ModBossTest do
       assert String.match?(message, ~r/Unknown mapping/i)
 
       assert {:ok, _encoded_values} = ModBoss.encode(schema, %{foo: 1, bar: 2})
-    end
-  end
-
-  describe "gap tolerance" do
-    test "without max_gap, makes separate requests for each non-contiguous mapping" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
-
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
-
-      set_objects(device, values)
-
-      {:ok, _result} =
-        ModBoss.read(
-          SchemaWithGaps,
-          read_func(device),
-          [
-            :first_group,
-            :second_group,
-            :third_group
-          ]
-        )
-
-      # Should make 2 separate requests since they're not contiguous
-      assert 3 = get_read_count(device)
-    end
-
-    test "batches mappings with gaps when max_gap scalar is specified" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
-
-      # Set up values for addresses 0-37 (including gaps)
-      # The gaps (6-15 and 24-34) will be read but discarded
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
-
-      set_objects(device, values)
-
-      {:ok, result} =
-        ModBoss.read(
-          SchemaWithGaps,
-          read_func(device),
-          [
-            :first_group,
-            :second_group,
-            :third_group
-          ],
-          max_gap: 10
-        )
-
-      # Should make 2 requests:
-      # 1. Addresses 0-23 (combines first_group and second_group with gap of exactly 10)
-      # 2. Addresses 35-37 (gap of 11 is too large to combine with previous)
-      assert 2 = get_read_count(device)
-
-      # Verify correct values were read
-      assert result[:first_group] == [0, 1, 2, 3, 4, 5]
-      assert result[:second_group] == [16, 17, 18, 19, 20, 21, 22, 23]
-      assert result[:third_group] == [35, 36, 37]
-    end
-
-    test "accepts keyword list for max_gap" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
-
-      set_objects(device, values)
-
-      {:ok, _result} =
-        ModBoss.read(
-          SchemaWithGaps,
-          read_func(device),
-          [:first_group, :second_group, :third_group],
-          max_gap: [holding_registers: 10]
-        )
-
-      assert 2 = get_read_count(device)
-    end
-
-    test "accepts map for max_gap" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
-
-      set_objects(device, values)
-
-      {:ok, _result} =
-        ModBoss.read(
-          SchemaWithGaps,
-          read_func(device),
-          [:first_group, :second_group, :third_group],
-          max_gap: %{holding_registers: 10}
-        )
-
-      assert 2 = get_read_count(device)
-    end
-
-    test "logs a warning and uses the default gap size when unrecognized gap size keys are used" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
-
-      set_objects(device, values)
-
-      # max_gap as a map
-      assert capture_log(fn ->
-               ModBoss.read(
-                 SchemaWithGaps,
-                 read_func(device),
-                 [:first_group, :second_group],
-                 max_gap: %{foo: 1}
-               )
-             end) =~ "Invalid :foo gap size specified"
-
-      assert 2 = get_read_count(device)
-
-      # max_gap as a keyword list
-      assert capture_log(fn ->
-               ModBoss.read(
-                 SchemaWithGaps,
-                 read_func(device),
-                 [:first_group, :second_group],
-                 max_gap: [bar: 10]
-               )
-             end) =~ "Invalid :bar gap size specified"
-
-      assert 2 = get_read_count(device)
-    end
-
-    test "logs a warning and uses the default gap size when provided value is not an integer" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
-
-      set_objects(device, values)
-
-      # max_gap as a map
-      assert capture_log(fn ->
-               ModBoss.read(
-                 SchemaWithGaps,
-                 read_func(device),
-                 [:first_group, :second_group],
-                 max_gap: %{holding_registers: "nope", input_registers: 3.14159}
-               )
-             end) =~ "Invalid max gap size"
-
-      assert 2 = get_read_count(device)
-
-      # max_gap as a keyword list
-      assert capture_log(fn ->
-               ModBoss.read(
-                 SchemaWithGaps,
-                 read_func(device),
-                 [:first_group, :second_group],
-                 max_gap: [holding_registers: {:yikes}]
-               )
-             end) =~ "Invalid max gap size"
-
-      assert 2 = get_read_count(device)
     end
   end
 

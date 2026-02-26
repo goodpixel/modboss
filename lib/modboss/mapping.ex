@@ -1,6 +1,6 @@
 defmodule ModBoss.Mapping do
   @moduledoc """
-  Struct representing the Modbus mapping.
+  Struct representing a modbus mapping.
   """
 
   @type name() :: atom()
