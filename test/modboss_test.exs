@@ -49,13 +49,13 @@ defmodule ModBossTest do
       """)
 
       device = start_supervised!({Agent, fn -> @initial_state end})
-      set_objects(device, %{1 => 11, 3 => 33})
+      encode_and_set(device, schema, foo: 11, baz: 33)
 
       # Even with a large gap tolerance, unmapped address 2 must prevent batching
-      result = ModBoss.read(schema, read_func(device), [:foo, :baz], max_gap: 10)
+      {:ok, %{foo: 11, baz: 33}} =
+        ModBoss.read(schema, read_func(device), [:foo, :baz], max_gap: 10)
 
       assert 2 = get_read_count(device)
-      assert {:ok, %{foo: 11, baz: 33}} = result
     end
 
     test "gap tolerance does not read across write-only registers" do
@@ -74,37 +74,30 @@ defmodule ModBossTest do
       """)
 
       device = start_supervised!({Agent, fn -> @initial_state end})
-      set_objects(device, %{1 => 11, 3 => 33})
+      encode_and_set(device, schema, foo: 11, baz: 33)
 
-      result = ModBoss.read(schema, read_func(device), [:foo, :baz], max_gap: 10)
+      # Even with a large gap tolerance, we'll need two reads since address 2 is unreadable
+      {:ok, %{foo: 11, baz: 33}} =
+        ModBoss.read(schema, read_func(device), [:foo, :baz], max_gap: 10)
 
       assert 2 = get_read_count(device)
-      assert {:ok, %{foo: 11, baz: 33}} = result
     end
 
     test "reads an individual mapping by name, returning a single result" do
       device = start_supervised!({Agent, fn -> @initial_state end})
-      set_objects(device, %{1 => 123})
+      encode_and_set(device, FakeSchema, foo: 123)
       {:ok, 123} = ModBoss.read(FakeSchema, read_func(device), :foo)
     end
 
     test "reads values for mappings that cover multiple address" do
       device = start_supervised!({Agent, fn -> @initial_state end})
-      set_objects(device, %{10 => :a, 11 => :b, 12 => :c})
-      {:ok, [:a, :b, :c]} = ModBoss.read(FakeSchema, read_func(device), :qux)
+      encode_and_set(device, FakeSchema, qux: [10, 11, 12])
+      {:ok, [10, 11, 12]} = ModBoss.read(FakeSchema, read_func(device), :qux)
     end
 
     test "reads multiple (and non-contiguous) mappings by name, returning a map of requested values" do
       device = start_supervised!({Agent, fn -> @initial_state end})
-
-      set_objects(device, %{
-        1 => :a,
-        2 => :b,
-        3 => :c,
-        10 => :x,
-        11 => :y,
-        12 => :z
-      })
+      encode_and_set(device, FakeSchema, foo: :a, bar: :b, baz: :c, qux: [:x, :y, :z])
 
       assert {:ok, result} = ModBoss.read(FakeSchema, read_func(device), [:foo, :qux])
       assert %{foo: :a, qux: [:x, :y, :z]} == result
@@ -153,10 +146,10 @@ defmodule ModBossTest do
 
       device = start_supervised!({Agent, fn -> @initial_state end})
 
-      holding_register_values = for i <- 1..126, into: %{}, do: {i, 1}
-      input_register_values = for i <- 201..326, into: %{}, do: {i, 1}
-      coil_values = for i <- 2001..4001, into: %{}, do: {i, 1}
-      discrete_input_values = for i <- 5001..7001, into: %{}, do: {i, 1}
+      holding_register_values = for i <- 1..126, into: %{}, do: {{:holding_register, i}, 1}
+      input_register_values = for i <- 201..326, into: %{}, do: {{:input_register, i}, 1}
+      coil_values = for i <- 2001..4001, into: %{}, do: {{:coil, i}, 1}
+      discrete_input_values = for i <- 5001..7001, into: %{}, do: {{:discrete_input, i}, 1}
 
       all_values =
         %{}
@@ -244,7 +237,12 @@ defmodule ModBossTest do
       end
       """)
 
-      values = for i <- 1..16, into: %{}, do: {i, 1}
+      values =
+        for type <- [:holding_register, :input_register, :coil, :discrete_input],
+            i <- 1..16,
+            into: %{},
+            do: {{type, i}, 1}
+
       device = start_supervised!({Agent, fn -> @initial_state end})
       set_objects(device, values)
 
@@ -316,12 +314,12 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       set_objects(device, %{
-        1 => 1,
-        2 => 2,
-        101 => 101,
-        102 => 102,
-        201 => 201,
-        301 => 301
+        {:holding_register, 1} => 1,
+        {:holding_register, 2} => 2,
+        {:coil, 101} => 101,
+        {:coil, 102} => 102,
+        {:input_register, 201} => 201,
+        {:discrete_input, 301} => 301
       })
 
       names = [:holding_1, :coil_1, :coil_2, :input_1, :discrete_1]
@@ -334,7 +332,7 @@ defmodule ModBossTest do
 
     test "raises an error if it doesn't get back the expected number of values" do
       device = start_supervised!({Agent, fn -> @initial_state end})
-      set_objects(device, %{1 => 1})
+      encode_and_set(device, FakeSchema, foo: 1)
 
       assert_raise RuntimeError,
                    "Attempted to read 3 values starting from address 10 but received 0 values.",
@@ -368,11 +366,11 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       set_objects(device, %{
-        1 => 1,
-        2 => 0,
-        3 => 20328,
-        4 => 8311,
-        5 => 28535
+        {:holding_register, 1} => 1,
+        {:holding_register, 2} => 0,
+        {:holding_register, 3} => 20328,
+        {:holding_register, 4} => 8311,
+        {:holding_register, 5} => 28535
       })
 
       assert {:ok, %{yep: true, nope: false, text: "Oh wow"}} =
@@ -402,8 +400,8 @@ defmodule ModBossTest do
 
       # only 1 and 2 are values expected to be decoded, so this will break…
       set_objects(device, %{
-        1 => 1,
-        2 => 33
+        {:holding_register, 1} => 1,
+        {:holding_register, 2} => 33
       })
 
       message = "Failed to decode :nope. Not sure what to do with 33."
@@ -431,11 +429,11 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       set_objects(device, %{
-        1 => 1,
-        2 => 0,
-        3 => 18533,
-        4 => 27756,
-        5 => 28416
+        {:holding_register, 1} => 1,
+        {:holding_register, 2} => 0,
+        {:holding_register, 3} => 18533,
+        {:holding_register, 4} => 27756,
+        {:holding_register, 5} => 28416
       })
 
       assert {:ok, %{yep: true, nope: false, text: "Hello"}} =
@@ -465,8 +463,8 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       set_objects(device, %{
-        1 => 1,
-        2 => 0
+        {:holding_register, 1} => 1,
+        {:holding_register, 2} => 0
       })
 
       assert {:ok, %{yep: 1, nope: 0}} =
@@ -492,11 +490,11 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       set_objects(device, %{
-        1 => 10,
-        2 => 20,
-        300 => 30,
-        400 => 0,
-        500 => 1
+        {:holding_register, 1} => 10,
+        {:holding_register, 2} => 20,
+        {:input_register, 300} => 30,
+        {:coil, 400} => 0,
+        {:discrete_input, 500} => 1
       })
 
       assert {:ok, result} = ModBoss.read(schema, read_func(device), :all)
@@ -526,7 +524,7 @@ defmodule ModBossTest do
 
       device = start_supervised!({Agent, fn -> @initial_state end})
 
-      values = Enum.into(0..8, %{}, fn i -> {i, i} end)
+      values = Enum.into(0..8, %{}, fn i -> {{:holding_register, i}, i} end)
       set_objects(device, values)
 
       {:ok, _result} = ModBoss.read(schema, read_func(device), [:first_group, :second_group])
@@ -556,7 +554,7 @@ defmodule ModBossTest do
 
       # Set up values for addresses 0-37 (including gaps between requested mappings)
       # The gaps (6-15 and 24-34) are mapped as readable filler, so gap tolerance can bridge them
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+      values = Enum.into(0..37, %{}, fn i -> {{:holding_register, i}, i} end)
 
       set_objects(device, values)
 
@@ -594,7 +592,7 @@ defmodule ModBossTest do
       """)
 
       device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+      values = Enum.into(0..37, %{}, fn i -> {{:holding_register, i}, i} end)
 
       set_objects(device, values)
 
@@ -629,7 +627,7 @@ defmodule ModBossTest do
       """)
 
       device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+      values = Enum.into(0..37, %{}, fn i -> {{:holding_register, i}, i} end)
 
       set_objects(device, values)
 
@@ -674,7 +672,12 @@ defmodule ModBossTest do
       """)
 
       device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..5, %{}, fn i -> {i, i} end)
+
+      values =
+        for type <- [:holding_register, :input_register, :coil, :discrete_input],
+            i <- 0..5,
+            into: %{},
+            do: {{type, i}, i}
 
       set_objects(device, values)
 
@@ -726,7 +729,7 @@ defmodule ModBossTest do
       """)
 
       device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+      values = Enum.into(0..37, %{}, fn i -> {{:holding_register, i}, i} end)
 
       set_objects(device, values)
 
@@ -767,7 +770,7 @@ defmodule ModBossTest do
       """)
 
       device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..37, %{}, fn i -> {i, i} end)
+      values = Enum.into(0..37, %{}, fn i -> {{:holding_register, i}, i} end)
 
       set_objects(device, values)
 
@@ -795,13 +798,13 @@ defmodule ModBossTest do
     test "writes objects referenced by human-readable names from map" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       :ok = ModBoss.write(FakeSchema, write_func(device), %{baz: 1, corge: 1234})
-      assert %{3 => 1, 15 => 1234} = get_registers(device)
+      assert %{{:holding_register, 3} => 1, {:holding_register, 15} => 1234} = get_objects(device)
     end
 
     test "writes objects referenced by human-readable names from keyword" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       :ok = ModBoss.write(FakeSchema, write_func(device), baz: 1, corge: 1234)
-      assert %{3 => 1, 15 => 1234} = get_registers(device)
+      assert %{{:holding_register, 3} => 1, {:holding_register, 15} => 1234} = get_objects(device)
     end
 
     test "returns an error if any mapping names are unrecognized" do
@@ -813,22 +816,35 @@ defmodule ModBossTest do
 
     test "refuses to write unless all mappings are declared writable" do
       device = start_supervised!({Agent, fn -> @initial_state end})
-      initial_values = %{1 => 0, 2 => 0, 3 => 0}
+
+      initial_values = %{
+        {:holding_register, 1} => 0,
+        {:holding_register, 2} => 0,
+        {:holding_register, 3} => 0
+      }
+
       set_objects(device, initial_values)
 
       assert {:error, "ModBoss Mapping(s) :foo, :bar in ModBossTest.FakeSchema are not writable."} =
                ModBoss.write(FakeSchema, write_func(device), %{foo: 1, bar: 2, baz: 3})
 
-      assert get_registers(device) == initial_values
+      assert get_objects(device) == initial_values
 
       assert :ok = ModBoss.write(FakeSchema, write_func(device), %{baz: 3})
-      assert get_registers(device) == Map.put(initial_values, 3, 3)
+      assert get_objects(device) == Map.put(initial_values, {:holding_register, 3}, 3)
     end
 
     test "writes named mappings that span more than one address" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       :ok = ModBoss.write(FakeSchema, write_func(device), %{qux: [0, 10, 20], quux: [-1, -2]})
-      assert %{10 => 0, 11 => 10, 12 => 20, 13 => -1, 14 => -2} = get_registers(device)
+
+      assert %{
+               {:holding_register, 10} => 0,
+               {:holding_register, 11} => 10,
+               {:holding_register, 12} => 20,
+               {:holding_register, 13} => -1,
+               {:holding_register, 14} => -2
+             } = get_objects(device)
     end
 
     test "encodes values per the `:as` option" do
@@ -858,12 +874,12 @@ defmodule ModBossTest do
       :ok = ModBoss.write(schema, write_func(device), %{yep: true, nope: false, text: "Oh wow"})
 
       assert %{
-               1 => 1,
-               2 => 0,
-               3 => 20328,
-               4 => 8311,
-               5 => 28535
-             } = get_registers(device)
+               {:holding_register, 1} => 1,
+               {:holding_register, 2} => 0,
+               {:holding_register, 3} => 20328,
+               {:holding_register, 4} => 8311,
+               {:holding_register, 5} => 28535
+             } = get_objects(device)
     end
 
     test "returns an error if the number of values doesn't match the number of mapped addresses" do
@@ -937,7 +953,13 @@ defmodule ModBossTest do
       :ok = ModBoss.write(schema, write_func(device), values)
 
       assert 2 == get_write_count(device)
-      assert %{1 => 1, 2 => 2, 101 => 3, 102 => 4} = get_registers(device)
+
+      assert %{
+               {:holding_register, 1} => 1,
+               {:holding_register, 2} => 2,
+               {:coil, 101} => 3,
+               {:coil, 102} => 4
+             } = get_objects(device)
     end
 
     # TODO: implication: mappings larger than the max batch size will fail
@@ -1000,7 +1022,7 @@ defmodule ModBossTest do
       :ok = ModBoss.write(schema, write_func(device), %{foo: 10, bar: 50})
 
       assert 2 = get_write_count(device)
-      assert %{1 => 10, 3 => 50} = get_registers(device)
+      assert %{{:holding_register, 1} => 10, {:holding_register, 3} => 50} = get_objects(device)
     end
   end
 
@@ -1104,13 +1126,18 @@ defmodule ModBossTest do
     end
   end
 
+  defp encode_and_set(device, schema, values) do
+    {:ok, encoded} = ModBoss.encode(schema, values)
+    set_objects(device, encoded)
+  end
+
   defp set_objects(device, %{} = values) when is_pid(device) do
     keys = Map.keys(values)
 
-    if not Enum.all?(keys, &is_integer/1) do
+    if not Enum.all?(keys, &match?({type, addr} when is_atom(type) and is_integer(addr), &1)) do
       raise """
-      The fake test device uses a map with integer keys to simulate a real device. \n
-      Manually set objects using their numeric address rather than their human name.
+      The fake test device expects {type, address} tuple keys.
+      Use set_objects/2 with keys like {:holding_register, 1} or use encode_and_set/3.
       """
     end
 
@@ -1120,7 +1147,7 @@ defmodule ModBossTest do
     end)
   end
 
-  defp get_registers(device) when is_pid(device) do
+  defp get_objects(device) when is_pid(device) do
     Agent.get(device, fn state -> state.objects end)
   end
 
@@ -1135,16 +1162,16 @@ defmodule ModBossTest do
   end
 
   defp read_func(device) when is_pid(device) do
-    fn _type, starting_address, count ->
+    fn type, starting_address, count ->
       range = starting_address..(starting_address + count - 1)
-      addresses = Enum.to_list(range)
+      keys = Enum.map(range, &{type, &1})
 
       values =
         Agent.get(device, fn state ->
           state.objects
-          |> Map.take(addresses)
-          |> Enum.sort_by(fn {address, _value} -> address end)
-          |> Enum.map(fn {_address, value} -> value end)
+          |> Map.take(keys)
+          |> Enum.sort_by(fn {{_type, address}, _value} -> address end)
+          |> Enum.map(fn {_key, value} -> value end)
         end)
 
       Agent.update(device, fn state -> %{state | reads: state.reads + 1} end)
@@ -1157,12 +1184,12 @@ defmodule ModBossTest do
   end
 
   defp write_func(device) when is_pid(device) do
-    fn _type, starting_address, values ->
+    fn type, starting_address, values ->
       objects =
         values
         |> List.wrap()
         |> Enum.with_index(starting_address)
-        |> Enum.into(%{}, fn {value, address} -> {address, value} end)
+        |> Enum.into(%{}, fn {value, address} -> {{type, address}, value} end)
 
       Agent.update(device, fn state ->
         updated_objects = Map.merge(state.objects, objects)
