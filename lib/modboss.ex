@@ -41,8 +41,15 @@ defmodule ModBoss do
   including a map with mapping names as keys and mapping values as results.
 
   ## Opts
-    * `:decode` — if `false`, returns the "raw" result as provided by `read_func`; defaults to `true`
-    * `:max_gap` — gap tolerance for reads. Accepts an integer (applies to all types) or per-type values; defaults to 0
+    * `:max_gap` — Allows reading across unrequested gaps to reduce the overall
+      number of requests that need to be made. Results from gaps will be
+      retrieved and discarded. This value can be specified as an integer
+      (which applies to all types) or per object type.
+    * `:debug` — if `true`, returns the full `%ModBoss.Mapping{}` struct(s);
+      defaults to `false`
+    * `:decode` — if `false`, ModBoss doesn't attempt to decode the retrieved values;
+      defaults to `true`. This option can be especially useful if you need insight
+      into a particular value that is failing to decode as expected.
 
   ## Examples
 
@@ -63,21 +70,31 @@ defmodule ModBoss do
       ModBoss.read(SchemaModule, read_func, :all)
       {:ok, %{foo: 75, bar: "ABC", baz: true, qux: 1024}}
 
-      # Get "raw" Modbus values (as returned by `read_func`)
-      ModBoss.read(SchemaModule, read_func, :all, decode: false)
-      {:ok, %{foo: 75, bar: [16706, 17152], baz: 1, qux: 1024}}
-
-      # Allow reading across unrequested gaps during batched reads
+      # Enable reading extra registers to reduce the number of requests
       ModBoss.read(SchemaModule, read_func, [:foo, :bar], max_gap: 10)
       {:ok, %{foo: 75, bar: "ABC"}}
 
       # …or allow reading across different gap sizes per type
-      ModBoss.read(SchemaModule, read_func, [:foo, :bar], max_gap: %{coils: 10})
+      ModBoss.read(SchemaModule, read_func, [:foo, :bar], max_gap: %{holding_registers: 10})
       {:ok, %{foo: 75, bar: "ABC"}}
+
+      # Get "raw" Modbus values (as returned by `read_func`)
+      ModBoss.read(SchemaModule, read_func, decode: false)
+      {:ok, bar: [16706, 17152]}
   """
   @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
           {:ok, any()} | {:error, any()}
   def read(module, read_func, name_or_names, opts \\ []) do
+    {max_gaps, opts} = Keyword.pop(opts, :max_gap, %{})
+    {debug, opts} = Keyword.pop(opts, :debug, false)
+    {decode, opts} = Keyword.pop(opts, :decode, true)
+
+    if Enum.any?(opts) do
+      raise "Unrecognized opts: #{inspect(opts)}"
+    end
+
+    field_to_return = if decode, do: :value, else: :encoded_value
+
     {names, plurality} =
       case name_or_names do
         :all -> {readable_mappings(module), :plural}
@@ -85,14 +102,10 @@ defmodule ModBoss do
         names when is_list(names) -> {names, :plural}
       end
 
-    should_decode = Keyword.get(opts, :decode, true)
-    max_gaps = opts |> Keyword.get(:max_gap, %{}) |> normalize_max_gap()
-    field_to_return = if should_decode, do: :value, else: :encoded_value
-
     with {:ok, mappings} <- get_mappings(:readable, module, names),
          {:ok, mappings} <- read_mappings(module, mappings, read_func, max_gaps),
-         {:ok, mappings} <- maybe_decode(mappings, should_decode) do
-      collect_results(mappings, plurality, field_to_return)
+         {:ok, mappings} <- maybe_decode(mappings, decode) do
+      collect_results(mappings, plurality, field_to_return, debug)
     end
   end
 
@@ -102,16 +115,20 @@ defmodule ModBoss do
     |> Enum.map(fn {name, _mapping} -> name end)
   end
 
-  defp collect_results(mappings, plurality, field_to_return) do
+  defp collect_results(mappings, plurality, _, _debug = true) do
     mappings
-    |> Enum.map(&{&1.name, Map.get(&1, field_to_return)})
-    |> then(fn results ->
-      case {results, plurality} do
-        {[{_, return_value}], :singular} -> {:ok, return_value}
-        {results, :plural} -> {:ok, Enum.into(results, %{})}
-      end
-    end)
+    |> Enum.map(&{&1.name, &1})
+    |> handle_plurality(plurality)
   end
+
+  defp collect_results(mappings, plurality, field_to_return, _debug = false) do
+    mappings
+    |> Enum.map(&{&1.name, Map.fetch!(&1, field_to_return)})
+    |> handle_plurality(plurality)
+  end
+
+  defp handle_plurality([{_name, value}], :singular), do: {:ok, value}
+  defp handle_plurality(values, :plural), do: {:ok, Enum.into(values, %{})}
 
   @doc """
   Encode values per the mapping without actually writing them.
@@ -320,6 +337,8 @@ defmodule ModBoss do
   @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
           [{Mapping.object_type(), integer(), [any()]}]
   defp chunk_mappings(mappings, module, mode, max_gaps \\ %{}) do
+    max_gaps = normalize_max_gap(max_gaps)
+
     # Build a set of {type, address} pairs for all readable mapped registers.
     # During reads, gap tolerance must only bridge gaps where every address
     # in the gap belongs to a known, readable mapping.
