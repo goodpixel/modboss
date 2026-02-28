@@ -85,6 +85,16 @@ defmodule ModBoss do
   @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
           {:ok, any()} | {:error, any()}
   def read(module, read_func, name_or_names, opts \\ []) do
+    {max_gaps, opts} = Keyword.pop(opts, :max_gap, %{})
+    {debug, opts} = Keyword.pop(opts, :debug, false)
+    {decode, opts} = Keyword.pop(opts, :decode, true)
+
+    if Enum.any?(opts) do
+      raise "Unrecognized opts: #{inspect(opts)}"
+    end
+
+    field_to_return = if decode, do: :value, else: :encoded_value
+
     {names, plurality} =
       case name_or_names do
         :all -> {readable_mappings(module), :plural}
@@ -92,14 +102,9 @@ defmodule ModBoss do
         names when is_list(names) -> {names, :plural}
       end
 
-    should_decode = Keyword.get(opts, :decode, true)
-    debug = Keyword.get(opts, :debug, false)
-    max_gaps = opts |> Keyword.get(:max_gap, %{}) |> normalize_max_gap()
-    field_to_return = if should_decode, do: :value, else: :encoded_value
-
     with {:ok, mappings} <- get_mappings(:readable, module, names),
          {:ok, mappings} <- read_mappings(module, mappings, read_func, max_gaps),
-         {:ok, mappings} <- maybe_decode(mappings, should_decode) do
+         {:ok, mappings} <- maybe_decode(mappings, decode) do
       collect_results(mappings, plurality, field_to_return, debug)
     end
   end
@@ -110,7 +115,7 @@ defmodule ModBoss do
     |> Enum.map(fn {name, _mapping} -> name end)
   end
 
-  defp collect_results(mappings, plurality, _field_to_return, _debug = true) do
+  defp collect_results(mappings, plurality, _, _debug = true) do
     mappings
     |> Enum.map(&{&1.name, &1})
     |> handle_plurality(plurality)
@@ -332,6 +337,8 @@ defmodule ModBoss do
   @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
           [{Mapping.object_type(), integer(), [any()]}]
   defp chunk_mappings(mappings, module, mode, max_gaps \\ %{}) do
+    max_gaps = normalize_max_gap(max_gaps)
+
     # Build a set of {type, address} pairs for all readable mapped registers.
     # During reads, gap tolerance must only bridge gaps where every address
     # in the gap belongs to a known, readable mapping.
