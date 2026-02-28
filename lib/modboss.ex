@@ -41,10 +41,15 @@ defmodule ModBoss do
   including a map with mapping names as keys and mapping values as results.
 
   ## Opts
-    * `:decode` — if `false`, returns the "raw" result as provided by `read_func`; defaults to `true`
-    * `:max_gap` — gap tolerance for reads. Accepts an integer (applies to all types) or per-type values; defaults to 0
+    * `:max_gap` — Allows reading across unrequested gaps to reduce the overall
+      number of requests that need to be made. Results from gaps will be
+      retrieved and discarded. This value can be specified as an integer
+      (which applies to all types) or per object type.
     * `:debug` — if `true`, returns the full `%ModBoss.Mapping{}` struct(s);
       defaults to `false`
+    * `:decode` — if `false`, ModBoss doesn't attempt to decode the retrieved values;
+      defaults to `true`. This option can be especially useful if you need insight
+      into a particular value that is failing to decode as expected.
 
   ## Examples
 
@@ -65,17 +70,17 @@ defmodule ModBoss do
       ModBoss.read(SchemaModule, read_func, :all)
       {:ok, %{foo: 75, bar: "ABC", baz: true, qux: 1024}}
 
-      # Get "raw" Modbus values (as returned by `read_func`)
-      ModBoss.read(SchemaModule, read_func, :all, decode: false)
-      {:ok, %{foo: 75, bar: [16706, 17152], baz: 1, qux: 1024}}
-
-      # Allow reading across unrequested gaps during batched reads
+      # Enable reading extra registers to reduce the number of requests
       ModBoss.read(SchemaModule, read_func, [:foo, :bar], max_gap: 10)
       {:ok, %{foo: 75, bar: "ABC"}}
 
       # …or allow reading across different gap sizes per type
-      ModBoss.read(SchemaModule, read_func, [:foo, :bar], max_gap: %{coils: 10})
+      ModBoss.read(SchemaModule, read_func, [:foo, :bar], max_gap: %{holding_registers: 10})
       {:ok, %{foo: 75, bar: "ABC"}}
+
+      # Get "raw" Modbus values (as returned by `read_func`)
+      ModBoss.read(SchemaModule, read_func, decode: false)
+      {:ok, bar: [16706, 17152]}
   """
   @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
           {:ok, any()} | {:error, any()}
