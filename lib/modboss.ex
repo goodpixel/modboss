@@ -43,6 +43,8 @@ defmodule ModBoss do
   ## Opts
     * `:decode` — if `false`, returns the "raw" result as provided by `read_func`; defaults to `true`
     * `:max_gap` — gap tolerance for reads. Accepts an integer (applies to all types) or per-type values; defaults to 0
+    * `:debug` — if `true`, returns the full `%ModBoss.Mapping{}` struct(s);
+      defaults to `false`
 
   ## Examples
 
@@ -86,13 +88,14 @@ defmodule ModBoss do
       end
 
     should_decode = Keyword.get(opts, :decode, true)
+    debug = Keyword.get(opts, :debug, false)
     max_gaps = opts |> Keyword.get(:max_gap, %{}) |> normalize_max_gap()
     field_to_return = if should_decode, do: :value, else: :encoded_value
 
     with {:ok, mappings} <- get_mappings(:readable, module, names),
          {:ok, mappings} <- read_mappings(module, mappings, read_func, max_gaps),
          {:ok, mappings} <- maybe_decode(mappings, should_decode) do
-      collect_results(mappings, plurality, field_to_return)
+      collect_results(mappings, plurality, field_to_return, debug)
     end
   end
 
@@ -102,16 +105,20 @@ defmodule ModBoss do
     |> Enum.map(fn {name, _mapping} -> name end)
   end
 
-  defp collect_results(mappings, plurality, field_to_return) do
+  defp collect_results(mappings, plurality, _field_to_return, _debug = true) do
     mappings
-    |> Enum.map(&{&1.name, Map.get(&1, field_to_return)})
-    |> then(fn results ->
-      case {results, plurality} do
-        {[{_, return_value}], :singular} -> {:ok, return_value}
-        {results, :plural} -> {:ok, Enum.into(results, %{})}
-      end
-    end)
+    |> Enum.map(&{&1.name, &1})
+    |> handle_plurality(plurality)
   end
+
+  defp collect_results(mappings, plurality, field_to_return, _debug = false) do
+    mappings
+    |> Enum.map(&{&1.name, Map.fetch!(&1, field_to_return)})
+    |> handle_plurality(plurality)
+  end
+
+  defp handle_plurality([{_name, value}], :singular), do: {:ok, value}
+  defp handle_plurality(values, :plural), do: {:ok, Enum.into(values, %{})}
 
   @doc """
   Encode values per the mapping without actually writing them.

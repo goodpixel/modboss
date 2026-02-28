@@ -844,6 +844,166 @@ defmodule ModBossTest do
 
       assert 2 = get_read_count(device)
     end
+
+    test "debug mode returns a single Mapping struct for a singular read" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      encode_and_set(device, FakeSchema, foo: 123)
+
+      assert {:ok,
+              %ModBoss.Mapping{
+                name: :foo,
+                type: :holding_register,
+                starting_address: 1,
+                address_count: 1,
+                as: {ModBoss.Encoding, :raw},
+                mode: :r,
+                encoded_value: 123,
+                value: 123
+              }} = ModBoss.read(FakeSchema, read_func(device), :foo, debug: true)
+    end
+
+    test "debug mode returns a map of Mapping structs for a plural read" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      encode_and_set(device, FakeSchema, foo: 11, bar: 22)
+
+      assert {:ok,
+              %{
+                foo: %ModBoss.Mapping{
+                  name: :foo,
+                  type: :holding_register,
+                  as: {ModBoss.Encoding, :raw},
+                  starting_address: 1,
+                  address_count: 1,
+                  mode: :r,
+                  encoded_value: 11,
+                  value: 11
+                },
+                bar: %ModBoss.Mapping{
+                  name: :bar,
+                  type: :holding_register,
+                  as: {ModBoss.Encoding, :raw},
+                  starting_address: 2,
+                  address_count: 1,
+                  mode: :r,
+                  encoded_value: 22,
+                  value: 22
+                }
+              }} = ModBoss.read(FakeSchema, read_func(device), [:foo, :bar], debug: true)
+    end
+
+    test "debug mode with decode: false returns struct with encoded_value but nil value" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :flag, as: :boolean
+        end
+
+        def decode_boolean(0), do: {:ok, false}
+        def decode_boolean(1), do: {:ok, true}
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 1
+      })
+
+      assert {:ok,
+              %ModBoss.Mapping{
+                name: :flag,
+                type: :holding_register,
+                as: {^schema, :boolean},
+                starting_address: 1,
+                address_count: 1,
+                encoded_value: 1,
+                value: nil
+              }} = ModBoss.read(schema, read_func(device), :flag, debug: true, decode: false)
+    end
+
+    test "debug mode with :all returns a map of all readable Mapping structs" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :alpha
+          holding_register 2, :beta, mode: :w
+          input_register 300, :gamma
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 42,
+        {:input_register, 300} => 99
+      })
+
+      assert {:ok,
+              %{
+                alpha: %ModBoss.Mapping{
+                  name: :alpha,
+                  type: :holding_register,
+                  as: {ModBoss.Encoding, :raw},
+                  starting_address: 1,
+                  address_count: 1,
+                  encoded_value: 42,
+                  value: 42
+                },
+                gamma: %ModBoss.Mapping{
+                  name: :gamma,
+                  type: :input_register,
+                  as: {ModBoss.Encoding, :raw},
+                  starting_address: 300,
+                  address_count: 1,
+                  encoded_value: 99,
+                  value: 99
+                }
+              }} = ModBoss.read(schema, read_func(device), :all, debug: true)
+    end
+
+    test "debug mode shows encoded register values alongside the decoded value" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 10..13, :model_name, as: {ModBoss.Encoding, :ascii}
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 10} => 21587,
+        {:holding_register, 11} => 13104,
+        {:holding_register, 12} => 12336,
+        {:holding_register, 13} => 0
+      })
+
+      assert {:ok,
+              %ModBoss.Mapping{
+                name: :model_name,
+                type: :holding_register,
+                starting_address: 10,
+                address_count: 4,
+                as: {ModBoss.Encoding, :ascii},
+                mode: :r,
+                encoded_value: [21587, 13104, 12336, 0],
+                value: "TS3000"
+              }} = ModBoss.read(schema, read_func(device), :model_name, debug: true)
+    end
   end
 
   describe "ModBoss.write/3" do
