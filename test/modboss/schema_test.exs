@@ -1,5 +1,5 @@
 defmodule ModBoss.SchemaTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   defmodule ExampleSchema do
     use ModBoss.Schema

@@ -1,5 +1,5 @@
 defmodule ModBoss.MappingTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias ModBoss.Mapping
 
   describe "new/4" do

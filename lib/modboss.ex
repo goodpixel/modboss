@@ -3,10 +3,72 @@ defmodule ModBoss do
   Human-friendly modbus reading, writing, and translation.
 
   Read and write modbus values by name, with automatic encoding and decoding.
+
+  ## Telemetry
+
+  ModBoss emits telemetry events for reads and writes using the
+  [`:telemetry`](https://hex.pm/packages/telemetry) library.
+
+  `:telemetry` is an **optional dependency**. If it is not included in your
+  application's dependencies, all telemetry calls become no-ops at compile time
+  with zero runtime overhead.
+
+  > #### Recompilation required {: .warning}
+  >
+  > Telemetry availability is determined at compile time. If you add or remove
+  > `:telemetry` as a dependency after ModBoss has been compiled, you must
+  > recompile ModBoss (e.g. `mix deps.compile modboss --force`).
+
+  ### Per-operation events
+
+  These events wrap the full `read/4` or `write/3` call (which may contain
+  multiple batched Modbus requests). They are **not** emitted for validation
+  errors (e.g. unknown mapping names or unreadable/unwritable mappings).
+
+  | Event | Measurements | Metadata |
+  |---|---|---|
+  | `[:modboss, :read, :start]` | `system_time`, `monotonic_time` | `schema`, `names` |
+  | `[:modboss, :read, :stop]` | `duration`, `monotonic_time`, `request_count`, `object_count` | `schema`, `names`, `result` |
+  | `[:modboss, :read, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `kind`, `reason`, `stacktrace` |
+  | `[:modboss, :write, :start]` | `system_time`, `monotonic_time` | `schema`, `names` |
+  | `[:modboss, :write, :stop]` | `duration`, `monotonic_time`, `request_count`, `object_count` | `schema`, `names`, `result` |
+  | `[:modboss, :write, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `kind`, `reason`, `stacktrace` |
+
+  ### Per-request events
+
+  These events wrap each individual invocation of your `read_func` or `write_func`
+  callback—one contiguous address range of one object type.
+
+  | Event | Measurements | Metadata |
+  |---|---|---|
+  | `[:modboss, :read_request, :start]` | `system_time`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count` |
+  | `[:modboss, :read_request, :stop]` | `duration`, `monotonic_time`, `object_count` | `schema`, `object_type`, `starting_address`, `address_count`, `result` |
+  | `[:modboss, :read_request, :exception]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
+  | `[:modboss, :write_request, :start]` | `system_time`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count` |
+  | `[:modboss, :write_request, :stop]` | `duration`, `monotonic_time`, `object_count` | `schema`, `object_type`, `starting_address`, `address_count`, `result` |
+  | `[:modboss, :write_request, :exception]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
+
+  ### Measurement details
+
+  * `duration` — elapsed time in native time units. Convert with
+    `System.convert_time_unit(duration, :native, :millisecond)`.
+  * `request_count` — number of Modbus requests made during the operation.
+  * `object_count` — total number of Modbus objects (registers/coils) involved.
+
+  ### Metadata details
+
+  * `schema` — the schema module (e.g. `MyDevice.Schema`).
+  * `names` — the requested mapping name(s) as a list of atoms.
+  * `result` — the raw result: `{:ok, value}` or `{:error, reason}` for reads;
+    `:ok` or `{:error, reason}` for writes.
+  * `object_type` — `:holding_register`, `:input_register`, `:coil`, or `:discrete_input`.
+  * `starting_address` — the starting address for the request.
+  * `address_count` — number of addresses in the request.
   """
 
   require Logger
   alias ModBoss.Mapping
+  alias ModBoss.Telemetry
 
   @typep mode :: :readable | :writable | :any
 
@@ -102,10 +164,22 @@ defmodule ModBoss do
         names when is_list(names) -> {names, :plural}
       end
 
-    with {:ok, mappings} <- get_mappings(:readable, module, names),
-         {:ok, mappings} <- read_mappings(module, mappings, read_func, max_gaps),
-         {:ok, mappings} <- maybe_decode(mappings, decode) do
-      collect_results(mappings, plurality, field_to_return, debug)
+    with {:ok, mappings} <- get_mappings(:readable, module, names) do
+      start_metadata = %{schema: module, names: names}
+
+      Telemetry.span([:modboss, :read], start_metadata, fn ->
+        with {:ok, mappings, batch_stats} <-
+               read_mappings(module, mappings, read_func, max_gaps, start_metadata),
+             {:ok, mappings} <- maybe_decode(mappings, decode) do
+          result = collect_results(mappings, plurality, field_to_return, debug)
+          stop_metadata = Map.put(start_metadata, :result, result)
+          {result, batch_stats, stop_metadata}
+        else
+          {:error, _reason} = error ->
+            stop_metadata = Map.put(start_metadata, :result, error)
+            {error, %{request_count: 0, object_count: 0}, stop_metadata}
+        end
+      end)
     end
   end
 
@@ -201,11 +275,24 @@ defmodule ModBoss do
   """
   @spec write(module(), write_func(), values()) :: :ok | {:error, any()}
   def write(module, write_func, values) when is_atom(module) and is_function(write_func) do
-    with {:ok, mappings} <- get_mappings(:writable, module, get_keys(values)),
+    names = get_keys(values)
+
+    with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values),
-         {:ok, mappings} <- encode(mappings),
-         {:ok, _mappings} <- write_mappings(module, mappings, write_func) do
-      :ok
+         {:ok, mappings} <- encode(mappings) do
+      start_metadata = %{schema: module, names: names}
+
+      Telemetry.span([:modboss, :write], start_metadata, fn ->
+        case write_mappings(module, mappings, write_func, start_metadata) do
+          {:ok, batch_stats} ->
+            stop_metadata = Map.put(start_metadata, :result, :ok)
+            {:ok, batch_stats, stop_metadata}
+
+          {{:error, _reason} = error, batch_stats} ->
+            stop_metadata = Map.put(start_metadata, :result, error)
+            {error, batch_stats, stop_metadata}
+        end
+      end)
     end
   end
 
@@ -248,90 +335,155 @@ defmodule ModBoss do
   defp unreadable(mappings), do: Enum.reject(mappings, &Mapping.readable?/1)
   defp unwritable(mappings), do: Enum.reject(mappings, &Mapping.writable?/1)
 
-  @spec read_mappings(module(), [Mapping.t()], fun, map()) ::
-          {:ok, [Mapping.t()]} | {:error, any()}
-  defp read_mappings(module, mappings, read_func, max_gaps) do
-    with {:ok, all_values} <- do_read_mappings(module, mappings, read_func, max_gaps) do
-      Enum.map(mappings, fn
-        %Mapping{address_count: 1} = mapping ->
-          value = Map.fetch!(all_values, mapping.starting_address)
-          %{mapping | encoded_value: value}
+  @spec read_mappings(module(), [Mapping.t()], fun, map(), map()) ::
+          {:ok, [Mapping.t()], map()} | {:error, any()}
+  defp read_mappings(module, mappings, read_func, max_gaps, telemetry_metadata) do
+    with {:ok, all_values, batch_stats} <-
+           do_read_mappings(module, mappings, read_func, max_gaps, telemetry_metadata) do
+      enriched =
+        Enum.map(mappings, fn
+          %Mapping{address_count: 1} = mapping ->
+            value = Map.fetch!(all_values, mapping.starting_address)
+            %{mapping | encoded_value: value}
 
-        %Mapping{address_count: _plural} = mapping ->
-          addresses = Mapping.address_range(mapping) |> Enum.to_list()
+          %Mapping{address_count: _plural} = mapping ->
+            addresses = Mapping.address_range(mapping) |> Enum.to_list()
 
-          values =
-            all_values
-            |> Map.take(addresses)
-            |> Enum.sort_by(fn {address, _value} -> address end)
-            |> Enum.map(fn {_address, value} -> value end)
+            values =
+              all_values
+              |> Map.take(addresses)
+              |> Enum.sort_by(fn {address, _value} -> address end)
+              |> Enum.map(fn {_address, value} -> value end)
 
-          %{mapping | encoded_value: values}
-      end)
-      |> then(&{:ok, &1})
+            %{mapping | encoded_value: values}
+        end)
+
+      {:ok, enriched, batch_stats}
     end
   end
 
-  @spec do_read_mappings(module(), [Mapping.t()], fun, map()) :: {:ok, map()}
-  defp do_read_mappings(module, mappings, read_func, max_gaps) do
-    mappings
-    |> chunk_mappings(module, :read, max_gaps)
-    |> Enum.map(fn [first | _rest] = chunk ->
-      last = List.last(chunk)
-      starting_address = first.starting_address
-      ending_address = last.starting_address + last.address_count - 1
-      address_count = ending_address - starting_address + 1
+  @spec do_read_mappings(module(), [Mapping.t()], fun, map(), map()) ::
+          {:ok, map(), map()} | {:error, any()}
+  defp do_read_mappings(module, mappings, read_func, max_gaps, telemetry_metadata) do
+    batches =
+      mappings
+      |> chunk_mappings(module, :read, max_gaps)
+      |> Enum.map(fn [first | _rest] = chunk ->
+        last = List.last(chunk)
+        starting_address = first.starting_address
+        ending_address = last.starting_address + last.address_count - 1
+        address_count = ending_address - starting_address + 1
 
-      {first.type, starting_address, address_count}
-    end)
-    |> Enum.reduce_while({:ok, %{}}, fn batch, {:ok, acc} ->
-      case read_batch(read_func, batch) do
-        {:ok, values_by_address} -> {:cont, {:ok, Map.merge(acc, values_by_address)}}
-        {:error, error} -> {:halt, {:error, error}}
-      end
-    end)
-  end
-
-  @spec read_batch(fun(), {any(), integer(), integer()}) :: {:ok, map()} | {:error, any()}
-  defp read_batch(read_func, {type, starting_address, address_count}) do
-    with {:ok, value_or_values} <- read_func.(type, starting_address, address_count) do
-      values = List.wrap(value_or_values)
-      value_count = Enum.count(values)
-
-      if value_count != address_count do
-        raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
-      end
-
-      batch_results =
-        values
-        |> Enum.with_index(starting_address)
-        |> Enum.into(%{}, fn {value, address} -> {address, value} end)
-
-      {:ok, batch_results}
-    end
-  end
-
-  defp write_mappings(module, mappings, write_func) do
-    mappings
-    |> chunk_mappings(module, :write)
-    |> Enum.map(fn [first | _rest] = chunk ->
-      Enum.reduce(chunk, {first.type, first.starting_address, []}, fn mapping, acc ->
-        {type, starting_address, encoded_values} = acc
-        {type, starting_address, encoded_values ++ List.wrap(mapping.encoded_value)}
+        {first.type, starting_address, address_count}
       end)
-    end)
-    |> Enum.reduce_while(:ok, fn {type, starting_address, batch_values}, :ok ->
-      value_or_values =
-        case batch_values do
-          [single_value] -> single_value
-          [_ | _] = multiple_values -> multiple_values
+
+    batch_stats = %{
+      request_count: length(batches),
+      object_count: batches |> Enum.map(&elem(&1, 2)) |> Enum.sum()
+    }
+
+    result =
+      Enum.reduce_while(batches, {:ok, %{}}, fn batch, {:ok, acc} ->
+        case read_batch(read_func, batch, telemetry_metadata) do
+          {:ok, values_by_address} -> {:cont, {:ok, Map.merge(acc, values_by_address)}}
+          {:error, error} -> {:halt, {:error, error}}
         end
+      end)
 
-      case write_func.(type, starting_address, value_or_values) do
-        :ok -> {:cont, :ok}
-        {:error, error} -> {:halt, {:error, error}}
+    case result do
+      {:ok, all_values} -> {:ok, all_values, batch_stats}
+      {:error, _} = error -> error
+    end
+  end
+
+  @spec read_batch(fun(), {any(), integer(), integer()}, map()) :: {:ok, map()} | {:error, any()}
+  defp read_batch(read_func, {type, starting_address, address_count}, telemetry_metadata) do
+    start_metadata =
+      Map.merge(telemetry_metadata, %{
+        object_type: type,
+        starting_address: starting_address,
+        address_count: address_count
+      })
+
+    Telemetry.span([:modboss, :read_request], start_metadata, fn ->
+      case read_func.(type, starting_address, address_count) do
+        {:ok, value_or_values} = result ->
+          values = List.wrap(value_or_values)
+          value_count = Enum.count(values)
+
+          if value_count != address_count do
+            raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
+          end
+
+          batch_results =
+            values
+            |> Enum.with_index(starting_address)
+            |> Enum.into(%{}, fn {value, address} -> {address, value} end)
+
+          stop_metadata = Map.put(start_metadata, :result, result)
+          {{:ok, batch_results}, %{object_count: address_count}, stop_metadata}
+
+        {:error, _reason} = error ->
+          stop_metadata = Map.put(start_metadata, :result, error)
+          {error, %{object_count: address_count}, stop_metadata}
       end
     end)
+  end
+
+  defp write_mappings(module, mappings, write_func, telemetry_metadata) do
+    prepared_batches =
+      mappings
+      |> chunk_mappings(module, :write)
+      |> Enum.map(fn [first | _rest] = chunk ->
+        Enum.reduce(chunk, {first.type, first.starting_address, []}, fn mapping, acc ->
+          {type, starting_address, encoded_values} = acc
+          {type, starting_address, encoded_values ++ List.wrap(mapping.encoded_value)}
+        end)
+      end)
+
+    batch_stats = %{
+      request_count: length(prepared_batches),
+      object_count:
+        prepared_batches |> Enum.map(fn {_, _, vals} -> length(vals) end) |> Enum.sum()
+    }
+
+    result =
+      Enum.reduce_while(prepared_batches, :ok, fn {type, starting_address, batch_values}, :ok ->
+        value_or_values =
+          case batch_values do
+            [single_value] -> single_value
+            [_ | _] = multiple_values -> multiple_values
+          end
+
+        address_count = length(batch_values)
+
+        start_metadata =
+          Map.merge(telemetry_metadata, %{
+            object_type: type,
+            starting_address: starting_address,
+            address_count: address_count
+          })
+
+        write_result =
+          Telemetry.span([:modboss, :write_request], start_metadata, fn ->
+            case write_func.(type, starting_address, value_or_values) do
+              :ok ->
+                stop_metadata = Map.put(start_metadata, :result, :ok)
+                {:ok, %{object_count: address_count}, stop_metadata}
+
+              {:error, _reason} = error ->
+                stop_metadata = Map.put(start_metadata, :result, error)
+                {error, %{object_count: address_count}, stop_metadata}
+            end
+          end)
+
+        case write_result do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+
+    {result, batch_stats}
   end
 
   @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
