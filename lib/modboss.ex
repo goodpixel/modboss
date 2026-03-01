@@ -3,10 +3,72 @@ defmodule ModBoss do
   Human-friendly modbus reading, writing, and translation.
 
   Read and write modbus values by name, with automatic encoding and decoding.
+
+  ## Telemetry
+
+  ModBoss emits telemetry events for reads and writes using the
+  [`:telemetry`](https://hex.pm/packages/telemetry) library.
+
+  `:telemetry` is an **optional dependency**. If it is not included in your
+  application's dependencies, all telemetry calls become no-ops at compile time
+  with zero runtime overhead.
+
+  > #### Recompilation required {: .warning}
+  >
+  > Telemetry availability is determined at compile time. If you add or remove
+  > `:telemetry` as a dependency after ModBoss has been compiled, you must
+  > recompile ModBoss (e.g. `mix deps.compile modboss --force`).
+
+  ### Per-operation events
+
+  These events wrap the full `read/4` or `write/3` call (which may contain
+  multiple batched Modbus requests). They are **not** emitted for validation
+  errors (e.g. unknown mapping names or unreadable/unwritable mappings).
+
+  | Event | Measurements | Metadata |
+  |---|---|---|
+  | `[:modboss, :read, :start]` | `system_time`, `monotonic_time` | `schema`, `names` |
+  | `[:modboss, :read, :stop]` | `duration`, `monotonic_time`, `request_count`, `object_count` | `schema`, `names`, `result` |
+  | `[:modboss, :read, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `kind`, `reason`, `stacktrace` |
+  | `[:modboss, :write, :start]` | `system_time`, `monotonic_time` | `schema`, `names` |
+  | `[:modboss, :write, :stop]` | `duration`, `monotonic_time`, `request_count`, `object_count` | `schema`, `names`, `result` |
+  | `[:modboss, :write, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `kind`, `reason`, `stacktrace` |
+
+  ### Per-request events
+
+  These events wrap each individual invocation of your `read_func` or `write_func`
+  callback—one contiguous address range of one object type.
+
+  | Event | Measurements | Metadata |
+  |---|---|---|
+  | `[:modboss, :read_request, :start]` | `system_time`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count` |
+  | `[:modboss, :read_request, :stop]` | `duration`, `monotonic_time`, `object_count` | `schema`, `object_type`, `starting_address`, `address_count`, `result` |
+  | `[:modboss, :read_request, :exception]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
+  | `[:modboss, :write_request, :start]` | `system_time`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count` |
+  | `[:modboss, :write_request, :stop]` | `duration`, `monotonic_time`, `object_count` | `schema`, `object_type`, `starting_address`, `address_count`, `result` |
+  | `[:modboss, :write_request, :exception]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
+
+  ### Measurement details
+
+  * `duration` — elapsed time in native time units. Convert with
+    `System.convert_time_unit(duration, :native, :millisecond)`.
+  * `request_count` — number of Modbus requests made during the operation.
+  * `object_count` — total number of Modbus objects (registers/coils) involved.
+
+  ### Metadata details
+
+  * `schema` — the schema module (e.g. `MyDevice.Schema`).
+  * `names` — the requested mapping name(s) as a list of atoms.
+  * `result` — the raw result: `{:ok, value}` or `{:error, reason}` for reads;
+    `:ok` or `{:error, reason}` for writes.
+  * `object_type` — `:holding_register`, `:input_register`, `:coil`, or `:discrete_input`.
+  * `starting_address` — the starting address for the request.
+  * `address_count` — number of addresses in the request.
   """
 
   require Logger
   alias ModBoss.Mapping
+  alias ModBoss.Telemetry
 
   @typep mode :: :readable | :writable | :any
 

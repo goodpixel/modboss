@@ -133,3 +133,20 @@ of values. It also becomes fairly straightforward to set up **virtual devices** 
 same object mappings as your physical devices (e.g. using an Elixir Agent to hold the state of
 the modbus objects in a map). And it makes for **easier troubleshooting** since you don't need to
 memorize (or look up) the object mappings when you're at an `iex` prompt.
+
+## Telemetry
+
+ModBoss optionally emits [`:telemetry`](https://hex.pm/packages/telemetry) events for
+reads and writes. To enable telemetry, add `:telemetry` to your dependencies:
+
+```elixir
+def deps do
+  [
+    {:modboss, "~> 0.1.0"},
+    {:telemetry, "~> 1.0"}
+  ]
+end
+```
+
+See the `ModBoss` module documentation for the full list of events, measurements,
+and metadata.
