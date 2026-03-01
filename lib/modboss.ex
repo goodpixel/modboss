@@ -165,47 +165,21 @@ defmodule ModBoss do
       end
 
     with {:ok, mappings} <- get_mappings(:readable, module, names) do
-      telemetry_metadata = %{schema: module, names: names}
-      start_time = emit_start([:modboss, :read], telemetry_metadata)
+      start_metadata = %{schema: module, names: names}
 
-      try do
+      Telemetry.span([:modboss, :read], start_metadata, fn ->
         with {:ok, mappings, batch_stats} <-
-               read_mappings(module, mappings, read_func, max_gaps, telemetry_metadata),
+               read_mappings(module, mappings, read_func, max_gaps, start_metadata),
              {:ok, mappings} <- maybe_decode(mappings, decode) do
           result = collect_results(mappings, plurality, field_to_return, debug)
-
-          emit_stop(
-            [:modboss, :read],
-            start_time,
-            batch_stats,
-            Map.put(telemetry_metadata, :result, result)
-          )
-
-          result
+          stop_metadata = Map.put(start_metadata, :result, result)
+          {result, batch_stats, stop_metadata}
         else
           {:error, _reason} = error ->
-            emit_stop(
-              [:modboss, :read],
-              start_time,
-              %{request_count: 0, object_count: 0},
-              Map.put(telemetry_metadata, :result, error)
-            )
-
-            error
+            stop_metadata = Map.put(start_metadata, :result, error)
+            {error, %{request_count: 0, object_count: 0}, stop_metadata}
         end
-      rescue
-        e ->
-          emit_exception(
-            [:modboss, :read],
-            start_time,
-            telemetry_metadata,
-            :error,
-            e,
-            __STACKTRACE__
-          )
-
-          reraise e, __STACKTRACE__
-      end
+      end)
     end
   end
 
@@ -306,44 +280,19 @@ defmodule ModBoss do
     with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values),
          {:ok, mappings} <- encode(mappings) do
-      telemetry_metadata = %{schema: module, names: names}
-      start_time = emit_start([:modboss, :write], telemetry_metadata)
+      start_metadata = %{schema: module, names: names}
 
-      try do
-        case write_mappings(module, mappings, write_func, telemetry_metadata) do
+      Telemetry.span([:modboss, :write], start_metadata, fn ->
+        case write_mappings(module, mappings, write_func, start_metadata) do
           {:ok, batch_stats} ->
-            emit_stop(
-              [:modboss, :write],
-              start_time,
-              batch_stats,
-              Map.put(telemetry_metadata, :result, :ok)
-            )
-
-            :ok
+            stop_metadata = Map.put(start_metadata, :result, :ok)
+            {:ok, batch_stats, stop_metadata}
 
           {{:error, _reason} = error, batch_stats} ->
-            emit_stop(
-              [:modboss, :write],
-              start_time,
-              batch_stats,
-              Map.put(telemetry_metadata, :result, error)
-            )
-
-            error
+            stop_metadata = Map.put(start_metadata, :result, error)
+            {error, batch_stats, stop_metadata}
         end
-      rescue
-        e ->
-          emit_exception(
-            [:modboss, :write],
-            start_time,
-            telemetry_metadata,
-            :error,
-            e,
-            __STACKTRACE__
-          )
-
-          reraise e, __STACKTRACE__
-      end
+      end)
     end
   end
 
@@ -449,16 +398,14 @@ defmodule ModBoss do
 
   @spec read_batch(fun(), {any(), integer(), integer()}, map()) :: {:ok, map()} | {:error, any()}
   defp read_batch(read_func, {type, starting_address, address_count}, telemetry_metadata) do
-    request_metadata =
+    start_metadata =
       Map.merge(telemetry_metadata, %{
         object_type: type,
         starting_address: starting_address,
         address_count: address_count
       })
 
-    start_time = emit_start([:modboss, :read_request], request_metadata)
-
-    try do
+    Telemetry.span([:modboss, :read_request], start_metadata, fn ->
       case read_func.(type, starting_address, address_count) do
         {:ok, value_or_values} = result ->
           values = List.wrap(value_or_values)
@@ -473,38 +420,14 @@ defmodule ModBoss do
             |> Enum.with_index(starting_address)
             |> Enum.into(%{}, fn {value, address} -> {address, value} end)
 
-          emit_stop(
-            [:modboss, :read_request],
-            start_time,
-            %{object_count: address_count},
-            Map.put(request_metadata, :result, result)
-          )
-
-          {:ok, batch_results}
+          stop_metadata = Map.put(start_metadata, :result, result)
+          {{:ok, batch_results}, %{object_count: address_count}, stop_metadata}
 
         {:error, _reason} = error ->
-          emit_stop(
-            [:modboss, :read_request],
-            start_time,
-            %{object_count: address_count},
-            Map.put(request_metadata, :result, error)
-          )
-
-          error
+          stop_metadata = Map.put(start_metadata, :result, error)
+          {error, %{object_count: address_count}, stop_metadata}
       end
-    rescue
-      e ->
-        emit_exception(
-          [:modboss, :read_request],
-          start_time,
-          request_metadata,
-          :error,
-          e,
-          __STACKTRACE__
-        )
-
-        reraise e, __STACKTRACE__
-    end
+    end)
   end
 
   defp write_mappings(module, mappings, write_func, telemetry_metadata) do
@@ -534,49 +457,29 @@ defmodule ModBoss do
 
         address_count = length(batch_values)
 
-        request_metadata =
+        start_metadata =
           Map.merge(telemetry_metadata, %{
             object_type: type,
             starting_address: starting_address,
             address_count: address_count
           })
 
-        start_time = emit_start([:modboss, :write_request], request_metadata)
+        write_result =
+          Telemetry.span([:modboss, :write_request], start_metadata, fn ->
+            case write_func.(type, starting_address, value_or_values) do
+              :ok ->
+                stop_metadata = Map.put(start_metadata, :result, :ok)
+                {:ok, %{object_count: address_count}, stop_metadata}
 
-        try do
-          case write_func.(type, starting_address, value_or_values) do
-            :ok ->
-              emit_stop(
-                [:modboss, :write_request],
-                start_time,
-                %{object_count: address_count},
-                Map.put(request_metadata, :result, :ok)
-              )
+              {:error, _reason} = error ->
+                stop_metadata = Map.put(start_metadata, :result, error)
+                {error, %{object_count: address_count}, stop_metadata}
+            end
+          end)
 
-              {:cont, :ok}
-
-            {:error, _reason} = error ->
-              emit_stop(
-                [:modboss, :write_request],
-                start_time,
-                %{object_count: address_count},
-                Map.put(request_metadata, :result, error)
-              )
-
-              {:halt, error}
-          end
-        rescue
-          e ->
-            emit_exception(
-              [:modboss, :write_request],
-              start_time,
-              request_metadata,
-              :error,
-              e,
-              __STACKTRACE__
-            )
-
-            reraise e, __STACKTRACE__
+        case write_result do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
         end
       end)
 
@@ -781,45 +684,5 @@ defmodule ModBoss do
       {:module, ^module} -> module
       {:error, reason} -> raise("Unable to load #{inspect(module)}: #{inspect(reason)}")
     end
-  end
-
-  defp emit_start(event, metadata) do
-    start_time = System.monotonic_time()
-
-    Telemetry.execute(
-      event ++ [:start],
-      %{
-        system_time: System.system_time(),
-        monotonic_time: start_time
-      },
-      metadata
-    )
-
-    start_time
-  end
-
-  defp emit_stop(event, start_time, extra_measurements, metadata) do
-    end_time = System.monotonic_time()
-
-    measurements =
-      Map.merge(extra_measurements, %{
-        duration: end_time - start_time,
-        monotonic_time: end_time
-      })
-
-    Telemetry.execute(event ++ [:stop], measurements, metadata)
-  end
-
-  defp emit_exception(event, start_time, metadata, kind, reason, stacktrace) do
-    end_time = System.monotonic_time()
-
-    Telemetry.execute(
-      event ++ [:exception],
-      %{
-        duration: end_time - start_time,
-        monotonic_time: end_time
-      },
-      Map.merge(metadata, %{kind: kind, reason: reason, stacktrace: stacktrace})
-    )
   end
 end

@@ -17,13 +17,6 @@ defmodule ModBoss.TelemetryTest do
   end
 
   describe "ModBoss.Telemetry shim" do
-    test "delegates execute/3 to :telemetry" do
-      attach([:modboss, :test])
-
-      ModBoss.Telemetry.execute([:modboss, :test], %{value: 1}, %{meta: :data})
-      assert_receive {:telemetry, [:modboss, :test], %{value: 1}, %{meta: :data}}
-    end
-
     test "delegates span/3 to :telemetry and returns the function result" do
       attach_many([
         [:modboss, :test_span, :start],
@@ -39,6 +32,25 @@ defmodule ModBoss.TelemetryTest do
                       %{initial: true}}
 
       assert_receive {:telemetry, [:modboss, :test_span, :stop], %{duration: _}, %{final: true}}
+    end
+
+    test "delegates span/3 with extra measurements" do
+      attach_many([
+        [:modboss, :test_span, :start],
+        [:modboss, :test_span, :stop]
+      ])
+
+      assert :the_result =
+               ModBoss.Telemetry.span([:modboss, :test_span], %{initial: true}, fn ->
+                 {:the_result, %{extra: 42}, %{final: true}}
+               end)
+
+      assert_receive {:telemetry, [:modboss, :test_span, :start], %{system_time: _},
+                      %{initial: true}}
+
+      assert_receive {:telemetry, [:modboss, :test_span, :stop], measurements, %{final: true}}
+      assert measurements.extra == 42
+      assert is_integer(measurements.duration)
     end
   end
 
@@ -348,13 +360,6 @@ defmodule ModBoss.TelemetryTest do
       refute_receive {:telemetry, [:modboss, :write, :start], _, _}
       refute_receive {:telemetry, [:modboss, :write_request, :start], _, _}
     end
-  end
-
-  defp attach(event) do
-    handler_id = "test-#{inspect(make_ref())}"
-    on_exit(fn -> :telemetry.detach(handler_id) end)
-
-    :telemetry.attach(handler_id, event, test_handler(self()), nil)
   end
 
   defp attach_many(events) do
