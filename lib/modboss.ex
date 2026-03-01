@@ -164,10 +164,48 @@ defmodule ModBoss do
         names when is_list(names) -> {names, :plural}
       end
 
-    with {:ok, mappings} <- get_mappings(:readable, module, names),
-         {:ok, mappings} <- read_mappings(module, mappings, read_func, max_gaps),
-         {:ok, mappings} <- maybe_decode(mappings, decode) do
-      collect_results(mappings, plurality, field_to_return, debug)
+    with {:ok, mappings} <- get_mappings(:readable, module, names) do
+      telemetry_metadata = %{schema: module, names: names}
+      start_time = emit_start([:modboss, :read], telemetry_metadata)
+
+      try do
+        with {:ok, mappings, batch_stats} <-
+               read_mappings(module, mappings, read_func, max_gaps, telemetry_metadata),
+             {:ok, mappings} <- maybe_decode(mappings, decode) do
+          result = collect_results(mappings, plurality, field_to_return, debug)
+
+          emit_stop(
+            [:modboss, :read],
+            start_time,
+            batch_stats,
+            Map.put(telemetry_metadata, :result, result)
+          )
+
+          result
+        else
+          {:error, _reason} = error ->
+            emit_stop(
+              [:modboss, :read],
+              start_time,
+              %{request_count: 0, object_count: 0},
+              Map.put(telemetry_metadata, :result, error)
+            )
+
+            error
+        end
+      rescue
+        e ->
+          emit_exception(
+            [:modboss, :read],
+            start_time,
+            telemetry_metadata,
+            :error,
+            e,
+            __STACKTRACE__
+          )
+
+          reraise e, __STACKTRACE__
+      end
     end
   end
 
@@ -263,11 +301,49 @@ defmodule ModBoss do
   """
   @spec write(module(), write_func(), values()) :: :ok | {:error, any()}
   def write(module, write_func, values) when is_atom(module) and is_function(write_func) do
-    with {:ok, mappings} <- get_mappings(:writable, module, get_keys(values)),
+    names = get_keys(values)
+
+    with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values),
-         {:ok, mappings} <- encode(mappings),
-         {:ok, _mappings} <- write_mappings(module, mappings, write_func) do
-      :ok
+         {:ok, mappings} <- encode(mappings) do
+      telemetry_metadata = %{schema: module, names: names}
+      start_time = emit_start([:modboss, :write], telemetry_metadata)
+
+      try do
+        case write_mappings(module, mappings, write_func, telemetry_metadata) do
+          {:ok, batch_stats} ->
+            emit_stop(
+              [:modboss, :write],
+              start_time,
+              batch_stats,
+              Map.put(telemetry_metadata, :result, :ok)
+            )
+
+            :ok
+
+          {{:error, _reason} = error, batch_stats} ->
+            emit_stop(
+              [:modboss, :write],
+              start_time,
+              batch_stats,
+              Map.put(telemetry_metadata, :result, error)
+            )
+
+            error
+        end
+      rescue
+        e ->
+          emit_exception(
+            [:modboss, :write],
+            start_time,
+            telemetry_metadata,
+            :error,
+            e,
+            __STACKTRACE__
+          )
+
+          reraise e, __STACKTRACE__
+      end
     end
   end
 
@@ -310,90 +386,201 @@ defmodule ModBoss do
   defp unreadable(mappings), do: Enum.reject(mappings, &Mapping.readable?/1)
   defp unwritable(mappings), do: Enum.reject(mappings, &Mapping.writable?/1)
 
-  @spec read_mappings(module(), [Mapping.t()], fun, map()) ::
-          {:ok, [Mapping.t()]} | {:error, any()}
-  defp read_mappings(module, mappings, read_func, max_gaps) do
-    with {:ok, all_values} <- do_read_mappings(module, mappings, read_func, max_gaps) do
-      Enum.map(mappings, fn
-        %Mapping{address_count: 1} = mapping ->
-          value = Map.fetch!(all_values, mapping.starting_address)
-          %{mapping | encoded_value: value}
+  @spec read_mappings(module(), [Mapping.t()], fun, map(), map()) ::
+          {:ok, [Mapping.t()], map()} | {:error, any()}
+  defp read_mappings(module, mappings, read_func, max_gaps, telemetry_metadata) do
+    with {:ok, all_values, batch_stats} <-
+           do_read_mappings(module, mappings, read_func, max_gaps, telemetry_metadata) do
+      enriched =
+        Enum.map(mappings, fn
+          %Mapping{address_count: 1} = mapping ->
+            value = Map.fetch!(all_values, mapping.starting_address)
+            %{mapping | encoded_value: value}
 
-        %Mapping{address_count: _plural} = mapping ->
-          addresses = Mapping.address_range(mapping) |> Enum.to_list()
+          %Mapping{address_count: _plural} = mapping ->
+            addresses = Mapping.address_range(mapping) |> Enum.to_list()
 
-          values =
-            all_values
-            |> Map.take(addresses)
-            |> Enum.sort_by(fn {address, _value} -> address end)
-            |> Enum.map(fn {_address, value} -> value end)
+            values =
+              all_values
+              |> Map.take(addresses)
+              |> Enum.sort_by(fn {address, _value} -> address end)
+              |> Enum.map(fn {_address, value} -> value end)
 
-          %{mapping | encoded_value: values}
-      end)
-      |> then(&{:ok, &1})
+            %{mapping | encoded_value: values}
+        end)
+
+      {:ok, enriched, batch_stats}
     end
   end
 
-  @spec do_read_mappings(module(), [Mapping.t()], fun, map()) :: {:ok, map()}
-  defp do_read_mappings(module, mappings, read_func, max_gaps) do
-    mappings
-    |> chunk_mappings(module, :read, max_gaps)
-    |> Enum.map(fn [first | _rest] = chunk ->
-      last = List.last(chunk)
-      starting_address = first.starting_address
-      ending_address = last.starting_address + last.address_count - 1
-      address_count = ending_address - starting_address + 1
+  @spec do_read_mappings(module(), [Mapping.t()], fun, map(), map()) ::
+          {:ok, map(), map()} | {:error, any()}
+  defp do_read_mappings(module, mappings, read_func, max_gaps, telemetry_metadata) do
+    batches =
+      mappings
+      |> chunk_mappings(module, :read, max_gaps)
+      |> Enum.map(fn [first | _rest] = chunk ->
+        last = List.last(chunk)
+        starting_address = first.starting_address
+        ending_address = last.starting_address + last.address_count - 1
+        address_count = ending_address - starting_address + 1
 
-      {first.type, starting_address, address_count}
-    end)
-    |> Enum.reduce_while({:ok, %{}}, fn batch, {:ok, acc} ->
-      case read_batch(read_func, batch) do
-        {:ok, values_by_address} -> {:cont, {:ok, Map.merge(acc, values_by_address)}}
-        {:error, error} -> {:halt, {:error, error}}
-      end
-    end)
-  end
-
-  @spec read_batch(fun(), {any(), integer(), integer()}) :: {:ok, map()} | {:error, any()}
-  defp read_batch(read_func, {type, starting_address, address_count}) do
-    with {:ok, value_or_values} <- read_func.(type, starting_address, address_count) do
-      values = List.wrap(value_or_values)
-      value_count = Enum.count(values)
-
-      if value_count != address_count do
-        raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
-      end
-
-      batch_results =
-        values
-        |> Enum.with_index(starting_address)
-        |> Enum.into(%{}, fn {value, address} -> {address, value} end)
-
-      {:ok, batch_results}
-    end
-  end
-
-  defp write_mappings(module, mappings, write_func) do
-    mappings
-    |> chunk_mappings(module, :write)
-    |> Enum.map(fn [first | _rest] = chunk ->
-      Enum.reduce(chunk, {first.type, first.starting_address, []}, fn mapping, acc ->
-        {type, starting_address, encoded_values} = acc
-        {type, starting_address, encoded_values ++ List.wrap(mapping.encoded_value)}
+        {first.type, starting_address, address_count}
       end)
-    end)
-    |> Enum.reduce_while(:ok, fn {type, starting_address, batch_values}, :ok ->
-      value_or_values =
-        case batch_values do
-          [single_value] -> single_value
-          [_ | _] = multiple_values -> multiple_values
+
+    batch_stats = %{
+      request_count: length(batches),
+      object_count: batches |> Enum.map(&elem(&1, 2)) |> Enum.sum()
+    }
+
+    result =
+      Enum.reduce_while(batches, {:ok, %{}}, fn batch, {:ok, acc} ->
+        case read_batch(read_func, batch, telemetry_metadata) do
+          {:ok, values_by_address} -> {:cont, {:ok, Map.merge(acc, values_by_address)}}
+          {:error, error} -> {:halt, {:error, error}}
         end
+      end)
 
-      case write_func.(type, starting_address, value_or_values) do
-        :ok -> {:cont, :ok}
-        {:error, error} -> {:halt, {:error, error}}
+    case result do
+      {:ok, all_values} -> {:ok, all_values, batch_stats}
+      {:error, _} = error -> error
+    end
+  end
+
+  @spec read_batch(fun(), {any(), integer(), integer()}, map()) :: {:ok, map()} | {:error, any()}
+  defp read_batch(read_func, {type, starting_address, address_count}, telemetry_metadata) do
+    request_metadata =
+      Map.merge(telemetry_metadata, %{
+        object_type: type,
+        starting_address: starting_address,
+        address_count: address_count
+      })
+
+    start_time = emit_start([:modboss, :read_request], request_metadata)
+
+    try do
+      case read_func.(type, starting_address, address_count) do
+        {:ok, value_or_values} = result ->
+          values = List.wrap(value_or_values)
+          value_count = Enum.count(values)
+
+          if value_count != address_count do
+            raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
+          end
+
+          batch_results =
+            values
+            |> Enum.with_index(starting_address)
+            |> Enum.into(%{}, fn {value, address} -> {address, value} end)
+
+          emit_stop(
+            [:modboss, :read_request],
+            start_time,
+            %{object_count: address_count},
+            Map.put(request_metadata, :result, result)
+          )
+
+          {:ok, batch_results}
+
+        {:error, _reason} = error ->
+          emit_stop(
+            [:modboss, :read_request],
+            start_time,
+            %{object_count: address_count},
+            Map.put(request_metadata, :result, error)
+          )
+
+          error
       end
-    end)
+    rescue
+      e ->
+        emit_exception(
+          [:modboss, :read_request],
+          start_time,
+          request_metadata,
+          :error,
+          e,
+          __STACKTRACE__
+        )
+
+        reraise e, __STACKTRACE__
+    end
+  end
+
+  defp write_mappings(module, mappings, write_func, telemetry_metadata) do
+    prepared_batches =
+      mappings
+      |> chunk_mappings(module, :write)
+      |> Enum.map(fn [first | _rest] = chunk ->
+        Enum.reduce(chunk, {first.type, first.starting_address, []}, fn mapping, acc ->
+          {type, starting_address, encoded_values} = acc
+          {type, starting_address, encoded_values ++ List.wrap(mapping.encoded_value)}
+        end)
+      end)
+
+    batch_stats = %{
+      request_count: length(prepared_batches),
+      object_count:
+        prepared_batches |> Enum.map(fn {_, _, vals} -> length(vals) end) |> Enum.sum()
+    }
+
+    result =
+      Enum.reduce_while(prepared_batches, :ok, fn {type, starting_address, batch_values}, :ok ->
+        value_or_values =
+          case batch_values do
+            [single_value] -> single_value
+            [_ | _] = multiple_values -> multiple_values
+          end
+
+        address_count = length(batch_values)
+
+        request_metadata =
+          Map.merge(telemetry_metadata, %{
+            object_type: type,
+            starting_address: starting_address,
+            address_count: address_count
+          })
+
+        start_time = emit_start([:modboss, :write_request], request_metadata)
+
+        try do
+          case write_func.(type, starting_address, value_or_values) do
+            :ok ->
+              emit_stop(
+                [:modboss, :write_request],
+                start_time,
+                %{object_count: address_count},
+                Map.put(request_metadata, :result, :ok)
+              )
+
+              {:cont, :ok}
+
+            {:error, _reason} = error ->
+              emit_stop(
+                [:modboss, :write_request],
+                start_time,
+                %{object_count: address_count},
+                Map.put(request_metadata, :result, error)
+              )
+
+              {:halt, error}
+          end
+        rescue
+          e ->
+            emit_exception(
+              [:modboss, :write_request],
+              start_time,
+              request_metadata,
+              :error,
+              e,
+              __STACKTRACE__
+            )
+
+            reraise e, __STACKTRACE__
+        end
+      end)
+
+    {result, batch_stats}
   end
 
   @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
@@ -594,5 +781,45 @@ defmodule ModBoss do
       {:module, ^module} -> module
       {:error, reason} -> raise("Unable to load #{inspect(module)}: #{inspect(reason)}")
     end
+  end
+
+  defp emit_start(event, metadata) do
+    start_time = System.monotonic_time()
+
+    Telemetry.execute(
+      event ++ [:start],
+      %{
+        system_time: System.system_time(),
+        monotonic_time: start_time
+      },
+      metadata
+    )
+
+    start_time
+  end
+
+  defp emit_stop(event, start_time, extra_measurements, metadata) do
+    end_time = System.monotonic_time()
+
+    measurements =
+      Map.merge(extra_measurements, %{
+        duration: end_time - start_time,
+        monotonic_time: end_time
+      })
+
+    Telemetry.execute(event ++ [:stop], measurements, metadata)
+  end
+
+  defp emit_exception(event, start_time, metadata, kind, reason, stacktrace) do
+    end_time = System.monotonic_time()
+
+    Telemetry.execute(
+      event ++ [:exception],
+      %{
+        duration: end_time - start_time,
+        monotonic_time: end_time
+      },
+      Map.merge(metadata, %{kind: kind, reason: reason, stacktrace: stacktrace})
+    )
   end
 end
