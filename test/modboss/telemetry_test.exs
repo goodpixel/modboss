@@ -16,6 +16,23 @@ defmodule ModBoss.TelemetryTest do
     end
   end
 
+  # A schema where all addresses are readable, enabling gap bridging
+  defmodule GapSchema do
+    use ModBoss.Schema
+
+    schema do
+      holding_register 1, :alpha, mode: :rw
+      holding_register 2, :bravo, mode: :rw
+      holding_register 3, :charlie, mode: :rw
+      holding_register 4, :delta, mode: :rw
+      holding_register 5, :echo, mode: :rw
+
+      holding_register 10, :foxtrot, mode: :rw
+      holding_register 11, :golf, mode: :rw
+      holding_register 12, :hotel, mode: :rw
+    end
+  end
+
   describe "read/4 telemetry" do
     setup do
       attach_many([
@@ -46,8 +63,11 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :read, :stop], stop_measurements, stop_metadata}
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
-      assert stop_measurements.request_count == 1
-      assert stop_measurements.object_count == 1
+      assert stop_measurements.modbus_requests == 1
+      assert stop_measurements.objects_requested == 1
+      assert stop_measurements.addresses_read == 1
+      assert stop_measurements.gap_addresses_read == 0
+      assert stop_measurements.max_gap_size == 0
       assert stop_metadata.schema == TestSchema
       assert stop_metadata.names == [:foo]
       assert stop_metadata.result == {:ok, 42}
@@ -74,7 +94,8 @@ defmodule ModBoss.TelemetryTest do
 
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
-      assert stop_measurements.object_count == 1
+      assert stop_measurements.gap_addresses_read == 0
+      assert stop_measurements.max_gap_size == 0
       assert stop_metadata.schema == TestSchema
       assert stop_metadata.object_type == :holding_register
       assert stop_metadata.starting_address == 1
@@ -99,14 +120,14 @@ defmodule ModBoss.TelemetryTest do
 
       # Batched reads
       assert_receive {:telemetry, [:modboss, :read, :stop], read_measurements, _stop_metadata}
-      assert read_measurements.request_count == 2
-      assert read_measurements.object_count == 3
+      assert read_measurements.modbus_requests == 2
+      assert read_measurements.objects_requested == 3
 
       types = Enum.sort([meta1.object_type, meta2.object_type])
       assert types == [:coil, :holding_register]
     end
 
-    test "emits correct object_count for multi-address mappings", %{device: device} do
+    test "emits correct counts for multi-address mappings", %{device: device} do
       set_objects(device, %{
         {:holding_register, 10} => 1,
         {:holding_register, 11} => 2,
@@ -116,12 +137,84 @@ defmodule ModBoss.TelemetryTest do
       {:ok, [1, 2, 3]} = ModBoss.read(TestSchema, read_func(device), :qux)
 
       assert_receive {:telemetry, [:modboss, :read, :stop], read_measurements, _}
-      assert read_measurements.object_count == 3
-      assert read_measurements.request_count == 1
+      assert read_measurements.objects_requested == 3
+      assert read_measurements.addresses_read == 3
+      assert read_measurements.modbus_requests == 1
 
-      assert_receive {:telemetry, [:modboss, :read_request, :stop], req_measurements, req_meta}
-      assert req_measurements.object_count == 3
+      assert_receive {:telemetry, [:modboss, :read_request, :stop], _req_measurements, req_meta}
       assert req_meta.address_count == 3
+    end
+
+    test "reports gap measurements when max_gap bridges addresses", %{device: device} do
+      # GapSchema: alpha(1), bravo(2), charlie(3), delta(4), echo(5)
+      # Request alpha(1) and echo(5) with max_gap: 10
+      # Gap addresses: 2, 3, 4 (bravo, charlie, delta — all readable)
+      # Should bridge into one request reading addresses 1-5
+      set_objects(device, %{
+        {:holding_register, 1} => 10,
+        {:holding_register, 2} => 20,
+        {:holding_register, 3} => 30,
+        {:holding_register, 4} => 40,
+        {:holding_register, 5} => 50
+      })
+
+      {:ok, %{alpha: 10, echo: 50}} =
+        ModBoss.read(GapSchema, read_func(device), [:alpha, :echo], max_gap: 10)
+
+      # Per-operation: 1 request, 2 objects requested, 5 addresses read, 3 gap addresses
+      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
+      assert measurements.modbus_requests == 1
+      assert measurements.objects_requested == 2
+      assert measurements.addresses_read == 5
+      assert measurements.gap_addresses_read == 3
+      assert measurements.max_gap_size == 3
+
+      # Per-request: single request spanning addresses 1-5
+      assert_receive {:telemetry, [:modboss, :read_request, :stop], req_measurements, req_meta}
+      assert req_meta.address_count == 5
+      assert req_measurements.gap_addresses_read == 3
+      assert req_measurements.max_gap_size == 3
+    end
+
+    test "reports multiple gaps correctly", %{device: device} do
+      # GapSchema: alpha(1), charlie(3), echo(5) with gaps at 2 and 4
+      # All addresses are readable so gaps can be bridged
+      set_objects(device, %{
+        {:holding_register, 1} => 10,
+        {:holding_register, 2} => 20,
+        {:holding_register, 3} => 30,
+        {:holding_register, 4} => 40,
+        {:holding_register, 5} => 50
+      })
+
+      {:ok, %{alpha: 10, charlie: 30, echo: 50}} =
+        ModBoss.read(GapSchema, read_func(device), [:alpha, :charlie, :echo], max_gap: 10)
+
+      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
+      assert measurements.modbus_requests == 1
+      assert measurements.objects_requested == 3
+      assert measurements.addresses_read == 5
+      assert measurements.gap_addresses_read == 2
+      # Two gaps of size 1 each (addr 2 and addr 4)
+      assert measurements.max_gap_size == 1
+
+      assert_receive {:telemetry, [:modboss, :read_request, :stop], req_measurements, _}
+      assert req_measurements.gap_addresses_read == 2
+      assert req_measurements.max_gap_size == 1
+    end
+
+    test "reports zero gap measurements without max_gap", %{device: device} do
+      set_objects(device, %{
+        {:holding_register, 1} => 10,
+        {:holding_register, 2} => 20
+      })
+
+      {:ok, %{foo: 10, bar: 20}} = ModBoss.read(TestSchema, read_func(device), [:foo, :bar])
+
+      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
+      assert measurements.gap_addresses_read == 0
+      assert measurements.max_gap_size == 0
+      assert measurements.addresses_read == measurements.objects_requested
     end
 
     test "includes names as a list even for singular reads", %{device: device} do
@@ -216,8 +309,8 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :write, :stop], stop_measurements, stop_metadata}
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
-      assert stop_measurements.request_count == 1
-      assert stop_measurements.object_count == 1
+      assert stop_measurements.modbus_requests == 1
+      assert stop_measurements.objects_requested == 1
       assert stop_metadata.schema == TestSchema
       assert stop_metadata.names == [:baz]
       assert stop_metadata.result == :ok
@@ -241,7 +334,6 @@ defmodule ModBoss.TelemetryTest do
                       stop_metadata}
 
       assert is_integer(stop_measurements.duration)
-      assert stop_measurements.object_count == 1
       assert stop_metadata.schema == TestSchema
       assert stop_metadata.object_type == :holding_register
       assert stop_metadata.starting_address == 3
@@ -258,22 +350,21 @@ defmodule ModBoss.TelemetryTest do
 
       # Batched writes
       assert_receive {:telemetry, [:modboss, :write, :stop], write_measurements, _}
-      assert write_measurements.request_count == 2
-      assert write_measurements.object_count == 3
+      assert write_measurements.modbus_requests == 2
+      assert write_measurements.objects_requested == 3
 
       types = Enum.sort([meta1.object_type, meta2.object_type])
       assert types == [:coil, :holding_register]
     end
 
-    test "emits correct object_count for multi-address writes", %{device: device} do
+    test "emits correct counts for multi-address writes", %{device: device} do
       :ok = ModBoss.write(TestSchema, write_func(device), qux: [1, 2, 3])
 
       assert_receive {:telemetry, [:modboss, :write, :stop], write_measurements, _}
-      assert write_measurements.object_count == 3
-      assert write_measurements.request_count == 1
+      assert write_measurements.objects_requested == 3
+      assert write_measurements.modbus_requests == 1
 
-      assert_receive {:telemetry, [:modboss, :write_request, :stop], req_measurements, req_meta}
-      assert req_measurements.object_count == 3
+      assert_receive {:telemetry, [:modboss, :write_request, :stop], _req_measurements, req_meta}
       assert req_meta.address_count == 3
     end
 
@@ -285,8 +376,8 @@ defmodule ModBoss.TelemetryTest do
       {:error, "device busy"} = ModBoss.write(TestSchema, failing_write_func, baz: 1)
 
       assert_receive {:telemetry, [:modboss, :write, :start], _, _}
-      assert_receive {:telemetry, [:modboss, :write, :stop], _, read_metadata}
-      assert read_metadata.result == {:error, "device busy"}
+      assert_receive {:telemetry, [:modboss, :write, :stop], _, write_metadata}
+      assert write_metadata.result == {:error, "device busy"}
 
       assert_receive {:telemetry, [:modboss, :write_request, :start], _, _}
       assert_receive {:telemetry, [:modboss, :write_request, :stop], _, req_metadata}
@@ -324,13 +415,6 @@ defmodule ModBoss.TelemetryTest do
     end
   end
 
-  defp attach(event) do
-    handler_id = "test-#{inspect(make_ref())}"
-    on_exit(fn -> :telemetry.detach(handler_id) end)
-
-    :telemetry.attach(handler_id, event, test_handler(self()), nil)
-  end
-
   defp attach_many(events) do
     handler_id = "test-#{inspect(make_ref())}"
     on_exit(fn -> :telemetry.detach(handler_id) end)
@@ -340,6 +424,8 @@ defmodule ModBoss.TelemetryTest do
 
   defp test_handler(test_pid) do
     fn event, measurements, metadata, _config ->
+      # Ensure we're only handling telemetry we triggered within our own test,
+      # not telemetry triggered by other tests running asynchronously.
       if self() == test_pid do
         send(test_pid, {:telemetry, event, measurements, metadata})
       end
