@@ -3,6 +3,70 @@ defmodule ModBoss do
   Human-friendly modbus reading, writing, and translation.
 
   Read and write modbus values by name, with automatic encoding and decoding.
+
+  ## Telemetry
+
+  ModBoss emits telemetry events for reads and writes using the
+  [`:telemetry`](https://hex.pm/packages/telemetry) library.
+
+  `:telemetry` is an **optional dependency**. If it is not included in your
+  application's dependencies, all telemetry calls become no-ops at compile time
+  with zero runtime overhead.
+
+  > #### Recompilation required {: .warning}
+  >
+  > Telemetry availability is determined at compile time. If you add or remove
+  > `:telemetry` as a dependency after ModBoss has been compiled, you must
+  > recompile ModBoss (e.g. `mix deps.compile modboss --force`).
+
+  ### Per-operation events
+
+  These events wrap the full `read/4` or `write/3` call (which may contain
+  multiple batched Modbus requests). They are **not** emitted for validation
+  errors (e.g. unknown mapping names or unreadable/unwritable mappings).
+
+  | Event | Measurements | Metadata |
+  |---|---|---|
+  | `[:modboss, :read, :start]` | `system_time`, `monotonic_time` | `schema`, `names` |
+  | `[:modboss, :read, :stop]` | `duration`, `monotonic_time`, `modbus_requests`, `objects_requested`, `addresses_read`, `gap_addresses_read`, `max_gap_size` | `schema`, `names`, `result` |
+  | `[:modboss, :read, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `kind`, `reason`, `stacktrace` |
+  | `[:modboss, :write, :start]` | `system_time`, `monotonic_time` | `schema`, `names` |
+  | `[:modboss, :write, :stop]` | `duration`, `monotonic_time`, `modbus_requests`, `objects_requested` | `schema`, `names`, `result` |
+  | `[:modboss, :write, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `kind`, `reason`, `stacktrace` |
+
+  ### Per-request events
+
+  These events wrap each individual invocation of your `read_func` or `write_func`
+  callback—one contiguous address range of one object type.
+
+  | Event | Measurements | Metadata |
+  |---|---|---|
+  | `[:modboss, :read_request, :start]` | `system_time`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count` |
+  | `[:modboss, :read_request, :stop]` | `duration`, `monotonic_time`, `gap_addresses_read`, `max_gap_size` | `schema`, `object_type`, `starting_address`, `address_count`, `result` |
+  | `[:modboss, :read_request, :exception]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
+  | `[:modboss, :write_request, :start]` | `system_time`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count` |
+  | `[:modboss, :write_request, :stop]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `result` |
+  | `[:modboss, :write_request, :exception]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
+
+  ### Measurement details
+
+  * `duration` — elapsed time in native time units. Convert with
+    `System.convert_time_unit(duration, :native, :millisecond)`.
+  * `modbus_requests` — number of Modbus requests made during the operation.
+  * `objects_requested` — total number of Modbus objects (registers/coils) referenced by named ModBoss mappings.
+  * `addresses_read` — total addresses read from the wire, including gap addresses (read operations only).
+  * `gap_addresses_read` — gap addresses read and discarded (read events only).
+  * `max_gap_size` — largest address gap bridged (read events only).
+
+  ### Metadata details
+
+  * `schema` — the schema module (e.g. `MyDevice.Schema`).
+  * `names` — the requested mapping name(s) as a list of atoms.
+  * `result` — the raw result: `{:ok, value}` or `{:error, reason}` for reads;
+    `:ok` or `{:error, reason}` for writes.
+  * `object_type` — `:holding_register`, `:input_register`, `:coil`, or `:discrete_input`.
+  * `starting_address` — the starting address for the request.
+  * `address_count` — number of addresses in the request.
   """
 
   require Logger
@@ -85,16 +149,14 @@ defmodule ModBoss do
   @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
           {:ok, any()} | {:error, any()}
   def read(module, read_func, name_or_names, opts \\ []) do
-    {max_gaps, opts} = Keyword.pop(opts, :max_gap, %{})
-    {debug, opts} = Keyword.pop(opts, :debug, false)
-    {decode, opts} = Keyword.pop(opts, :decode, true)
+    {names, opts} = evaluate_read_opts(module, name_or_names, opts)
 
-    if Enum.any?(opts) do
-      raise "Unrecognized opts: #{inspect(opts)}"
+    with {:ok, mappings} <- get_mappings(:readable, module, names) do
+      do_reads(module, mappings, read_func, opts, names)
     end
+  end
 
-    field_to_return = if decode, do: :value, else: :encoded_value
-
+  defp evaluate_read_opts(module, name_or_names, opts) do
     {names, plurality} =
       case name_or_names do
         :all -> {readable_mappings(module), :plural}
@@ -102,17 +164,160 @@ defmodule ModBoss do
         names when is_list(names) -> {names, :plural}
       end
 
-    with {:ok, mappings} <- get_mappings(:readable, module, names),
-         {:ok, mappings} <- read_mappings(module, mappings, read_func, max_gaps),
-         {:ok, mappings} <- maybe_decode(mappings, decode) do
-      collect_results(mappings, plurality, field_to_return, debug)
-    end
+    opts =
+      case Keyword.split(opts, [:max_gap, :debug, :decode]) do
+        {opts, []} -> Keyword.put(opts, :plurality, plurality)
+        {_opts, unsupported_opts} -> raise "Unrecognized opts: #{inspect(unsupported_opts)}"
+      end
+
+    {names, opts}
   end
 
   defp readable_mappings(module) do
     module.__modboss_schema__()
     |> Enum.filter(fn {_, mapping} -> Mapping.readable?(mapping) end)
     |> Enum.map(fn {name, _mapping} -> name end)
+  end
+
+  if Code.ensure_loaded?(:telemetry) do
+    defp do_reads(module, mappings, read_func, opts, names) do
+      start_metadata = %{schema: module, names: names}
+
+      :telemetry.span([:modboss, :read], start_metadata, fn ->
+        {result, object_count, chunks, gap_count, largest_gap} =
+          read_mappings(module, mappings, read_func, opts)
+
+        stop_measurements = %{
+          objects_requested: object_count,
+          modbus_requests: chunks && length(chunks),
+          addresses_read: object_count && object_count + gap_count,
+          gap_addresses_read: gap_count,
+          max_gap_size: largest_gap
+        }
+
+        stop_metadata = Map.put(start_metadata, :result, result)
+        {result, stop_measurements, stop_metadata}
+      end)
+    end
+  else
+    defp do_reads(module, mappings, read_func, opts, _names) do
+      {result, _, _, _, _} = read_mappings(module, mappings, read_func, opts)
+      result
+    end
+  end
+
+  defp read_mappings(module, mappings, read_func, opts) do
+    max_gaps = Keyword.get(opts, :max_gap, %{})
+    debug = Keyword.get(opts, :debug, false)
+    decode = Keyword.get(opts, :decode, true)
+    plurality = Keyword.fetch!(opts, :plurality)
+    field_to_return = if decode, do: :value, else: :encoded_value
+
+    with chunks <- chunk_mappings(mappings, module, :read, max_gaps),
+         {:ok, values, gap_addresses, largest_gap} <- read_chunks(chunks, module, read_func),
+         {:ok, mappings} <- hydrate_values(mappings, values),
+         {:ok, mappings} <- maybe_decode(mappings, decode) do
+      object_count = Enum.sum_by(mappings, & &1.address_count)
+      result = collect_results(mappings, plurality, field_to_return, debug)
+      {result, object_count, chunks, gap_addresses, largest_gap}
+    else
+      {:error, _error} = result ->
+        {result, nil, nil, nil, nil}
+    end
+  end
+
+  defp read_chunks(chunks, module, read_func) do
+    initial = {:ok, _values = %{}, _overall_gap_address = 0, _overall_largest_gap = 0}
+
+    Enum.reduce_while(chunks, initial, fn {mappings, total_gap_addresses, largest_gap}, acc ->
+      {:ok, values, overall_gap_addresses, overall_largest_gap} = acc
+      [first | _rest] = mappings
+      last = List.last(mappings)
+
+      starting_address = first.starting_address
+      ending_address = last.starting_address + last.address_count - 1
+      address_count = ending_address - starting_address + 1
+
+      read_func = instrument_read_callback(read_func, module, total_gap_addresses, largest_gap)
+
+      case read_batch(read_func, {first.type, starting_address, address_count}) do
+        {:ok, batch_values} ->
+          values_by_addr = Map.merge(values, batch_values)
+          gap_count = overall_gap_addresses + total_gap_addresses
+          most_largest_gap = Enum.max([overall_largest_gap, largest_gap])
+          {:cont, {:ok, values_by_addr, gap_count, most_largest_gap}}
+
+        {:error, error} ->
+          {:halt, {:error, error}}
+      end
+    end)
+  end
+
+  if Code.ensure_loaded?(:telemetry) do
+    defp instrument_read_callback(read_func, module, gap_addresses, largest_gap) do
+      fn type, starting_address, address_count ->
+        start_metadata = %{
+          schema: module,
+          object_type: type,
+          starting_address: starting_address,
+          address_count: address_count
+        }
+
+        :telemetry.span([:modboss, :read_request], start_metadata, fn ->
+          result = read_func.(type, starting_address, address_count)
+
+          stop_measurements = %{
+            gap_addresses_read: gap_addresses,
+            max_gap_size: largest_gap
+          }
+
+          stop_metadata = Map.put(start_metadata, :result, result)
+
+          {result, stop_measurements, stop_metadata}
+        end)
+      end
+    end
+  else
+    defp instrument_read_callback(read_func, _, _, _), do: read_func
+  end
+
+  @spec read_batch(fun(), {any(), integer(), integer()}) :: {:ok, map()} | {:error, any()}
+  defp read_batch(read_func, {type, starting_address, address_count}) do
+    with {:ok, value_or_values} <- read_func.(type, starting_address, address_count) do
+      values = List.wrap(value_or_values)
+      value_count = Enum.count(values)
+
+      if value_count != address_count do
+        raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
+      end
+
+      batch_results =
+        values
+        |> Enum.with_index(starting_address)
+        |> Enum.into(%{}, fn {value, address} -> {address, value} end)
+
+      {:ok, batch_results}
+    end
+  end
+
+  defp hydrate_values(mappings, values) do
+    Enum.map(mappings, fn
+      %Mapping{address_count: 1} = mapping ->
+        encoded_value = Map.fetch!(values, mapping.starting_address)
+        %{mapping | encoded_value: encoded_value}
+
+      %Mapping{address_count: _plural} = mapping ->
+        addresses = Mapping.address_range(mapping) |> Enum.to_list()
+
+        encoded_values =
+          values
+          |> Map.take(addresses)
+          |> Enum.sort_by(fn {address, _value} -> address end)
+          |> Enum.map(fn {_address, value} -> value end)
+
+        %{mapping | encoded_value: encoded_values}
+    end)
+    |> then(&{:ok, &1})
   end
 
   defp collect_results(mappings, plurality, _, _debug = true) do
@@ -201,11 +406,12 @@ defmodule ModBoss do
   """
   @spec write(module(), write_func(), values()) :: :ok | {:error, any()}
   def write(module, write_func, values) when is_atom(module) and is_function(write_func) do
-    with {:ok, mappings} <- get_mappings(:writable, module, get_keys(values)),
+    names = get_keys(values)
+
+    with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values),
-         {:ok, mappings} <- encode(mappings),
-         {:ok, _mappings} <- write_mappings(module, mappings, write_func) do
-      :ok
+         {:ok, mappings} <- encode(mappings) do
+      do_writes(module, mappings, write_func, names)
     end
   end
 
@@ -248,95 +454,86 @@ defmodule ModBoss do
   defp unreadable(mappings), do: Enum.reject(mappings, &Mapping.readable?/1)
   defp unwritable(mappings), do: Enum.reject(mappings, &Mapping.writable?/1)
 
-  @spec read_mappings(module(), [Mapping.t()], fun, map()) ::
-          {:ok, [Mapping.t()]} | {:error, any()}
-  defp read_mappings(module, mappings, read_func, max_gaps) do
-    with {:ok, all_values} <- do_read_mappings(module, mappings, read_func, max_gaps) do
-      Enum.map(mappings, fn
-        %Mapping{address_count: 1} = mapping ->
-          value = Map.fetch!(all_values, mapping.starting_address)
-          %{mapping | encoded_value: value}
+  if Code.ensure_loaded?(:telemetry) do
+    defp do_writes(module, mappings, write_func, names) do
+      start_metadata = %{schema: module, names: names}
 
-        %Mapping{address_count: _plural} = mapping ->
-          addresses = Mapping.address_range(mapping) |> Enum.to_list()
+      :telemetry.span([:modboss, :write], start_metadata, fn ->
+        {result, objects, chunks} = write_mappings(module, mappings, write_func)
 
-          values =
-            all_values
-            |> Map.take(addresses)
-            |> Enum.sort_by(fn {address, _value} -> address end)
-            |> Enum.map(fn {_address, value} -> value end)
+        stop_measurements = %{
+          objects_requested: objects,
+          modbus_requests: chunks && length(chunks)
+        }
 
-          %{mapping | encoded_value: values}
+        stop_metadata = Map.put(start_metadata, :result, result)
+        {result, stop_measurements, stop_metadata}
       end)
-      |> then(&{:ok, &1})
     end
-  end
-
-  @spec do_read_mappings(module(), [Mapping.t()], fun, map()) :: {:ok, map()}
-  defp do_read_mappings(module, mappings, read_func, max_gaps) do
-    mappings
-    |> chunk_mappings(module, :read, max_gaps)
-    |> Enum.map(fn [first | _rest] = chunk ->
-      last = List.last(chunk)
-      starting_address = first.starting_address
-      ending_address = last.starting_address + last.address_count - 1
-      address_count = ending_address - starting_address + 1
-
-      {first.type, starting_address, address_count}
-    end)
-    |> Enum.reduce_while({:ok, %{}}, fn batch, {:ok, acc} ->
-      case read_batch(read_func, batch) do
-        {:ok, values_by_address} -> {:cont, {:ok, Map.merge(acc, values_by_address)}}
-        {:error, error} -> {:halt, {:error, error}}
-      end
-    end)
-  end
-
-  @spec read_batch(fun(), {any(), integer(), integer()}) :: {:ok, map()} | {:error, any()}
-  defp read_batch(read_func, {type, starting_address, address_count}) do
-    with {:ok, value_or_values} <- read_func.(type, starting_address, address_count) do
-      values = List.wrap(value_or_values)
-      value_count = Enum.count(values)
-
-      if value_count != address_count do
-        raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
-      end
-
-      batch_results =
-        values
-        |> Enum.with_index(starting_address)
-        |> Enum.into(%{}, fn {value, address} -> {address, value} end)
-
-      {:ok, batch_results}
+  else
+    defp do_writes(module, mappings, write_func, _names) do
+      {result, _objects, _chunks} = write_mappings(module, mappings, write_func)
+      result
     end
   end
 
   defp write_mappings(module, mappings, write_func) do
-    mappings
-    |> chunk_mappings(module, :write)
-    |> Enum.map(fn [first | _rest] = chunk ->
-      Enum.reduce(chunk, {first.type, first.starting_address, []}, fn mapping, acc ->
-        {type, starting_address, encoded_values} = acc
-        {type, starting_address, encoded_values ++ List.wrap(mapping.encoded_value)}
-      end)
-    end)
-    |> Enum.reduce_while(:ok, fn {type, starting_address, batch_values}, :ok ->
-      value_or_values =
-        case batch_values do
-          [single_value] -> single_value
-          [_ | _] = multiple_values -> multiple_values
-        end
+    object_count = Enum.sum_by(mappings, & &1.address_count)
+    chunks = chunk_mappings(mappings, module, :write, 0)
 
-      case write_func.(type, starting_address, value_or_values) do
-        :ok -> {:cont, :ok}
-        {:error, error} -> {:halt, {:error, error}}
-      end
-    end)
+    result =
+      chunks
+      |> Enum.map(fn {[first | _rest] = chunk, _gap_addresses, _largest_gap} ->
+        encoded_values =
+          Enum.reduce(chunk, [], fn mapping, acc ->
+            acc ++ List.wrap(mapping.encoded_value)
+          end)
+
+        {first.type, first.starting_address, first.address_count, encoded_values}
+      end)
+      |> Enum.reduce_while(:ok, fn {type, starting_address, address_count, batch_values}, :ok ->
+        value_or_values =
+          case batch_values do
+            [single_value] -> single_value
+            [_ | _] = multiple_values -> multiple_values
+          end
+
+        write_func = instrument_write_callback(write_func, module, address_count)
+
+        case write_func.(type, starting_address, value_or_values) do
+          :ok -> {:cont, :ok}
+          {:error, error} -> {:halt, {:error, error}}
+        end
+      end)
+
+    {result, object_count, chunks}
   end
 
-  @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
+  if Code.ensure_loaded?(:telemetry) do
+    defp instrument_write_callback(write_func, module, address_count) do
+      fn type, starting_address, value_or_values ->
+        start_metadata = %{
+          schema: module,
+          object_type: type,
+          starting_address: starting_address,
+          address_count: address_count
+        }
+
+        :telemetry.span([:modboss, :write_request], start_metadata, fn ->
+          result = write_func.(type, starting_address, value_or_values)
+          stop_measurements = %{}
+          stop_metadata = Map.put(start_metadata, :result, result)
+          {result, stop_measurements, stop_metadata}
+        end)
+      end
+    end
+  else
+    defp instrument_write_callback(write_func, _, _), do: write_func
+  end
+
+  @spec chunk_mappings([Mapping.t()], module(), :read | :write, integer()) ::
           [{Mapping.object_type(), integer(), [any()]}]
-  defp chunk_mappings(mappings, module, mode, max_gaps \\ %{}) do
+  defp chunk_mappings(mappings, module, mode, max_gaps) do
     max_gaps = normalize_max_gap(max_gaps)
 
     # Build a set of {type, address} pairs for all readable mapped registers.
@@ -353,6 +550,8 @@ defmodule ModBoss do
         |> MapSet.new()
       end
 
+    initial_acc = {_mappings = [], _address_count = 0, _gap_address_count = 0, _largest_gap = 0}
+
     chunk_fun = fn %Mapping{} = mapping, acc ->
       max_chunk = module.__max_batch__(mode, mapping.type)
 
@@ -361,30 +560,37 @@ defmodule ModBoss do
       end
 
       case acc do
-        {[], 0} ->
-          {:cont, {[mapping], mapping.address_count}}
+        {_mappings = [], _address_count = 0, _gap_address_count = 0, _largest_gap = 0} ->
+          {:cont, {[mapping], mapping.address_count, 0, 0}}
 
-        {[prior_mapping | _] = mappings, running_count} ->
+        {[prior_mapping | _] = mappings, running_count, running_gap_count, largest_gap} ->
           gap = compute_gap(prior_mapping, mapping)
           max_gap = if mode == :write, do: 0, else: Map.fetch!(max_gaps, mapping.type)
           total_addresses = running_count + gap.size + mapping.address_count
 
           if total_addresses <= max_chunk and allow_gap?(gap, mode, max_gap, readable_addresses) do
-            {:cont, {[mapping | mappings], total_addresses}}
+            running_gap_count = running_gap_count + gap.size
+            largest_gap = Enum.max([largest_gap, gap.size])
+
+            {:cont, {[mapping | mappings], total_addresses, running_gap_count, largest_gap}}
           else
-            {:cont, Enum.reverse(mappings), {[mapping], mapping.address_count}}
+            chunk_to_emit = {Enum.reverse(mappings), running_gap_count, largest_gap}
+            new_chunk = {[mapping], mapping.address_count, 0, 0}
+            {:cont, chunk_to_emit, new_chunk}
           end
       end
     end
 
-    after_fun = fn {mappings, _count} -> {:cont, Enum.reverse(mappings), :ignored} end
+    after_fun = fn {mappings, _address_count, gap_address_count, largest_gap} ->
+      {:cont, {Enum.reverse(mappings), gap_address_count, largest_gap}, :ignored}
+    end
 
     mappings
     |> Enum.group_by(& &1.type)
     |> Enum.flat_map(fn {_type, mappings_for_type} ->
       mappings_for_type
       |> Enum.sort_by(& &1.starting_address)
-      |> Enum.chunk_while({[], 0}, chunk_fun, after_fun)
+      |> Enum.chunk_while(initial_acc, chunk_fun, after_fun)
     end)
   end
 
