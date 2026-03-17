@@ -21,28 +21,257 @@ defmodule ModBoss.Telemetry do
   may contain multiple batched Modbus requests). They are **not** emitted for
   validation errors (e.g. unknown mapping names or unreadable/unwritable mappings).
 
-  | Event | Measurements | Metadata |
-  |---|---|---|
-  | `[:modboss, :read, :start]` | `system_time`, `monotonic_time` | `schema`, `names`, `label` |
-  | `[:modboss, :read, :stop]` | `duration`, `monotonic_time`, `modbus_requests`, `objects_requested`, `addresses_read`, `gap_addresses_read`, `max_gap_size` | `schema`, `names`, `label`, `result` |
-  | `[:modboss, :read, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `label`, `kind`, `reason`, `stacktrace` |
-  | `[:modboss, :write, :start]` | `system_time`, `monotonic_time` | `schema`, `names`, `label` |
-  | `[:modboss, :write, :stop]` | `duration`, `monotonic_time`, `modbus_requests`, `objects_requested` | `schema`, `names`, `label`, `result` |
-  | `[:modboss, :write, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `label`, `kind`, `reason`, `stacktrace` |
+  ### Read Start
+      # Event
+      [:modboss, :read, :start]
+
+      # Measurements
+      %{
+        system_time: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata:
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term()
+      }
+
+  ### Read Stop
+      # Event
+      [:modboss, :read, :stop]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer(),
+        modbus_requests: non_neg_integer(),
+        objects_requested: non_neg_integer(),
+        addresses_read: non_neg_integer(),
+        gap_addresses_read: non_neg_integer(),
+        max_gap_size: non_neg_integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        result: term()
+      }
+
+  ### Read Exception
+      # Event
+      [:modboss, :read, :exception]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        kind: atom(),
+        reason: term(),
+        stacktrace: list()
+      }
+
+  ### Write Start
+      # Event
+      [:modboss, :write, :start]
+
+      # Measurements
+      %{
+        system_time: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term()
+      }
+
+  ### Write Stop
+      # Event
+      [:modboss, :write, :stop]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer(),
+        modbus_requests: non_neg_integer(),
+        objects_requested: non_neg_integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        result: term()
+      }
+
+  ### Write Exception
+      # Event
+      [:modboss, :write, :exception]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        kind: atom(),
+        reason: term(),
+        stacktrace: list()
+      }
 
   ## Per-callback events
 
   These events wrap each individual invocation of your `read_func` or `write_func`
   callback—one contiguous address range of one object type.
 
-  | Event | Measurements | Metadata |
-  |---|---|---|
-  | `[:modboss, :read_callback, :start]` | `system_time`, `monotonic_time` | `schema`, `names`, `label`, `object_type`, `starting_address`, `address_count` |
-  | `[:modboss, :read_callback, :stop]` | `duration`, `monotonic_time`, `gap_addresses_read`, `max_gap_size` | `schema`, `names`, `label`, `object_type`, `starting_address`, `address_count`, `result` |
-  | `[:modboss, :read_callback, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `label`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
-  | `[:modboss, :write_callback, :start]` | `system_time`, `monotonic_time` | `schema`, `names`, `label`, `object_type`, `starting_address`, `address_count` |
-  | `[:modboss, :write_callback, :stop]` | `duration`, `monotonic_time` | `schema`, `names`, `label`, `object_type`, `starting_address`, `address_count`, `result` |
-  | `[:modboss, :write_callback, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `label`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
+  ### Read Callback Start
+      # Event
+      [:modboss, :read_callback, :start]
+
+      # Measurements
+      %{
+        system_time: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        object_type: atom(),
+        starting_address: non_neg_integer(),
+        address_count: pos_integer()
+      }
+
+  ### Read Callback Stop
+      # Event
+      [:modboss, :read_callback, :stop]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer(),
+        gap_addresses_read: non_neg_integer(),
+        max_gap_size: non_neg_integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        object_type: atom(),
+        starting_address: non_neg_integer(),
+        address_count: pos_integer(),
+        result: term()
+      }
+
+  ### Read Callback Exception
+      # Event
+      [:modboss, :read_callback, :exception]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        object_type: atom(),
+        starting_address: non_neg_integer(),
+        address_count: pos_integer(),
+        kind: atom(),
+        reason: term(),
+        stacktrace: list()
+      }
+
+  ### Write Callback Start
+      # Event
+      [:modboss, :write_callback, :start]
+
+      # Measurements
+      %{
+        system_time: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        object_type: atom(),
+        starting_address: non_neg_integer(),
+        address_count: pos_integer()
+      }
+
+  ### Write Callback Stop
+      # Event
+      [:modboss, :write_callback, :stop]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        object_type: atom(),
+        starting_address: non_neg_integer(),
+        address_count: pos_integer(),
+        result: term()
+      }
+
+  ### Write Callback Exception
+      # Event
+      [:modboss, :write_callback, :exception]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        object_type: atom(),
+        starting_address: non_neg_integer(),
+        address_count: pos_integer(),
+        kind: atom(),
+        reason: term(),
+        stacktrace: list()
+      }
 
   ## Measurement details
 
