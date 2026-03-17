@@ -361,6 +361,60 @@ defmodule ModBoss.TelemetryTest do
       refute_receive {:telemetry, [:modboss, :read, :start], _, _}
       refute_receive {:telemetry, [:modboss, :read_callback, :start], _, _}
     end
+
+    test "includes label in all event metadata when telemetry_label is provided", %{
+      device: device
+    } do
+      set_objects(device, %{{:holding_register, 1} => 42})
+
+      {:ok, 42} = ModBoss.read(TestSchema, read_func(device), :foo, telemetry_label: :foo_label)
+
+      assert_receive {:telemetry, [:modboss, :read, :start], _, start_metadata}
+      assert start_metadata.label == :foo_label
+
+      assert_receive {:telemetry, [:modboss, :read, :stop], _, stop_metadata}
+      assert stop_metadata.label == :foo_label
+
+      assert_receive {:telemetry, [:modboss, :read_callback, :start], _, cb_start_metadata}
+      assert cb_start_metadata.label == :foo_label
+
+      assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, cb_stop_metadata}
+      assert cb_stop_metadata.label == :foo_label
+    end
+
+    test "includes label in exception metadata when telemetry_label is provided" do
+      boom_func = fn _type, _addr, _count -> raise "boom!" end
+
+      assert_raise RuntimeError, "boom!", fn ->
+        ModBoss.read(TestSchema, boom_func, :foo, telemetry_label: :my_device)
+      end
+
+      assert_receive {:telemetry, [:modboss, :read, :exception], _, meta}
+      assert meta.label == :my_device
+
+      assert_receive {:telemetry, [:modboss, :read_callback, :exception], _, cb_meta}
+      assert cb_meta.label == :my_device
+    end
+
+    test "does not include label key in metadata when telemetry_label is not provided", %{
+      device: device
+    } do
+      set_objects(device, %{{:holding_register, 1} => 42})
+
+      {:ok, 42} = ModBoss.read(TestSchema, read_func(device), :foo)
+
+      assert_receive {:telemetry, [:modboss, :read, :start], _, metadata}
+      refute Map.has_key?(metadata, :label)
+
+      assert_receive {:telemetry, [:modboss, :read, :stop], _, stop_metadata}
+      refute Map.has_key?(stop_metadata, :label)
+
+      assert_receive {:telemetry, [:modboss, :read_callback, :start], _, cb_metadata}
+      refute Map.has_key?(cb_metadata, :label)
+
+      assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, cb_stop_metadata}
+      refute Map.has_key?(cb_stop_metadata, :label)
+    end
   end
 
   describe "write/3 telemetry" do
@@ -545,6 +599,59 @@ defmodule ModBoss.TelemetryTest do
 
       refute_receive {:telemetry, [:modboss, :write, :start], _, _}
       refute_receive {:telemetry, [:modboss, :write_callback, :start], _, _}
+    end
+
+    test "includes label in all event metadata when telemetry_label is provided", %{
+      device: device
+    } do
+      :ok =
+        ModBoss.write(TestSchema, write_func(device), [baz: 99],
+          telemetry_label: %{port: :rs485, address: 12}
+        )
+
+      assert_receive {:telemetry, [:modboss, :write, :start], _, start_metadata}
+      assert start_metadata.label == %{port: :rs485, address: 12}
+
+      assert_receive {:telemetry, [:modboss, :write, :stop], _, stop_metadata}
+      assert stop_metadata.label == %{port: :rs485, address: 12}
+
+      assert_receive {:telemetry, [:modboss, :write_callback, :start], _, cb_start_metadata}
+      assert cb_start_metadata.label == %{port: :rs485, address: 12}
+
+      assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, cb_stop_metadata}
+      assert cb_stop_metadata.label == %{port: :rs485, address: 12}
+    end
+
+    test "includes label in exception metadata when telemetry_label is provided" do
+      kaboom_func = fn _type, _addr, _values -> raise "kaboom!" end
+
+      assert_raise RuntimeError, "kaboom!", fn ->
+        ModBoss.write(TestSchema, kaboom_func, [baz: 1], telemetry_label: :my_device)
+      end
+
+      assert_receive {:telemetry, [:modboss, :write, :exception], _, meta}
+      assert meta.label == :my_device
+
+      assert_receive {:telemetry, [:modboss, :write_callback, :exception], _, cb_meta}
+      assert cb_meta.label == :my_device
+    end
+
+    test "does not include label key in metadata when telemetry_label is not provided", %{
+      device: device
+    } do
+      :ok = ModBoss.write(TestSchema, write_func(device), baz: 99)
+
+      assert_receive {:telemetry, [:modboss, :write, :start], _, metadata}
+      refute Map.has_key?(metadata, :label)
+
+      assert_receive {:telemetry, [:modboss, :write, :stop], _, stop_metadata}
+      refute Map.has_key?(stop_metadata, :label)
+
+      assert_receive {:telemetry, [:modboss, :write_callback, :start], _, cb_metadata}
+      refute Map.has_key?(cb_metadata, :label)
+
+      assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, cb_stop_metadata}
+      refute Map.has_key?(cb_stop_metadata, :label)
     end
   end
 

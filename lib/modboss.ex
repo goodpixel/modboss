@@ -56,6 +56,9 @@ defmodule ModBoss do
     * `:decode` — if `false`, ModBoss doesn't attempt to decode the retrieved values;
       defaults to `true`. This option can be especially useful if you need insight
       into a particular value that is failing to decode as expected.
+    * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
+      event metadata. Useful for identifying which device or connection a
+      request belongs to. See `ModBoss.Telemetry` for details.
 
   ## Examples
 
@@ -107,7 +110,7 @@ defmodule ModBoss do
       end
 
     opts =
-      case Keyword.split(opts, [:max_gap, :debug, :decode]) do
+      case Keyword.split(opts, [:max_gap, :debug, :decode, :telemetry_label]) do
         {opts, []} -> Keyword.put(opts, :plurality, plurality)
         {_opts, unsupported_opts} -> raise "Unrecognized opts: #{inspect(unsupported_opts)}"
       end
@@ -123,10 +126,11 @@ defmodule ModBoss do
 
   if Code.ensure_loaded?(:telemetry) do
     defp do_reads(module, mappings, read_func, opts, names) do
-      start_metadata = %{schema: module, names: names}
+      label = Keyword.get(opts, :telemetry_label)
+      start_metadata = %{schema: module, names: names} |> maybe_put_label(label)
 
       :telemetry.span([:modboss, :read], start_metadata, fn ->
-        {result, stats} = read_mappings(module, mappings, read_func, opts)
+        {result, stats} = read_mappings(module, mappings, read_func, opts, label)
 
         stop_measurements = %{
           objects_requested: stats.objects,
@@ -142,12 +146,12 @@ defmodule ModBoss do
     end
   else
     defp do_reads(module, mappings, read_func, opts, _names) do
-      {result, _} = read_mappings(module, mappings, read_func, opts)
+      {result, _} = read_mappings(module, mappings, read_func, opts, _label = nil)
       result
     end
   end
 
-  defp read_mappings(module, mappings, read_func, opts) do
+  defp read_mappings(module, mappings, read_func, opts, label) do
     max_gaps = Keyword.get(opts, :max_gap, %{})
     debug = Keyword.get(opts, :debug, false)
     decode = Keyword.get(opts, :decode, true)
@@ -157,7 +161,7 @@ defmodule ModBoss do
     {read_result, stats} =
       mappings
       |> chunk_mappings(module, :read, max_gaps)
-      |> read_chunks(module, read_func)
+      |> read_chunks(module, read_func, label)
 
     with {:ok, values} <- read_result,
          {:ok, mappings} <- hydrate_values(mappings, values),
@@ -169,7 +173,7 @@ defmodule ModBoss do
     end
   end
 
-  defp read_chunks(chunks, module, read_func) do
+  defp read_chunks(chunks, module, read_func, label) do
     initial_stats = %{objects: 0, requests: 0, addresses: 0, gap_addresses: 0, largest_gap: 0}
     initial = {{:ok, %{}}, initial_stats}
 
@@ -192,7 +196,7 @@ defmodule ModBoss do
       }
 
       names = Enum.map(mappings, & &1.name)
-      read_func = instrument_read_callback(read_func, module, names, gap_addresses, largest_gap)
+      read_func = instrument_read(read_func, module, names, gap_addresses, largest_gap, label)
 
       case read_batch(read_func, first.type, starting_address, address_count) do
         {:ok, batch_values} -> {:cont, {{:ok, Map.merge(values, batch_values)}, updated_stats}}
@@ -202,15 +206,17 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp instrument_read_callback(read_func, module, names, gap_addresses, largest_gap) do
+    defp instrument_read(read_func, module, names, gap_addresses, largest_gap, label) do
       fn type, starting_address, address_count ->
-        start_metadata = %{
-          schema: module,
-          names: names,
-          object_type: type,
-          starting_address: starting_address,
-          address_count: address_count
-        }
+        start_metadata =
+          %{
+            schema: module,
+            names: names,
+            object_type: type,
+            starting_address: starting_address,
+            address_count: address_count
+          }
+          |> maybe_put_label(label)
 
         :telemetry.span([:modboss, :read_callback], start_metadata, fn ->
           result = read_func.(type, starting_address, address_count)
@@ -227,7 +233,7 @@ defmodule ModBoss do
       end
     end
   else
-    defp instrument_read_callback(read_func, _, _, _, _), do: read_func
+    defp instrument_read(read_func, _, _, _, _, _), do: read_func
   end
 
   @spec read_batch(fun(), any(), integer(), integer()) :: {:ok, map()} | {:error, any()}
@@ -336,12 +342,17 @@ defmodule ModBoss do
 
   > #### Non-atomic writes! {: .warning}
   >
-  > While `ModBoss.write/3` has the _feel_ of being atomic, it's important to recognize that it
+  > While `ModBoss.write/4` has the _feel_ of being atomic, it's important to recognize that it
   > is not! It's fully possible that a write might fail after prior writes within the same call to
-  > `ModBoss.write/3` have already succeeded.
+  > `ModBoss.write/4` have already succeeded.
   >
-  > Within `ModBoss.write/3`, if any call to `write_func` returns an error tuple,
+  > Within `ModBoss.write/4`, if any call to `write_func` returns an error tuple,
   > the function will immediately abort, and any subsequent writes will be skipped.
+
+  ## Opts
+    * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
+      event metadata. Useful for identifying which device or connection a
+      request belongs to. See `ModBoss.Telemetry` for details.
 
   ## Example
 
@@ -353,14 +364,21 @@ defmodule ModBoss do
       iex> ModBoss.write(MyDevice.Schema, write_func, foo: 75, bar: "ABC")
       :ok
   """
-  @spec write(module(), write_func(), values()) :: :ok | {:error, any()}
-  def write(module, write_func, values) when is_atom(module) and is_function(write_func) do
+  @spec write(module(), write_func(), values(), keyword()) :: :ok | {:error, any()}
+  def write(module, write_func, values, opts \\ [])
+      when is_atom(module) and is_function(write_func) do
+    {label, remaining_opts} = Keyword.pop(opts, :telemetry_label)
+
+    if remaining_opts != [] do
+      raise "Unrecognized opts: #{inspect(remaining_opts)}"
+    end
+
     names = get_keys(values)
 
     with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values),
          {:ok, mappings} <- encode(mappings) do
-      do_writes(module, mappings, write_func, names)
+      do_writes(module, mappings, write_func, names, label)
     end
   end
 
@@ -404,11 +422,11 @@ defmodule ModBoss do
   defp unwritable(mappings), do: Enum.reject(mappings, &Mapping.writable?/1)
 
   if Code.ensure_loaded?(:telemetry) do
-    defp do_writes(module, mappings, write_func, names) do
-      start_metadata = %{schema: module, names: names}
+    defp do_writes(module, mappings, write_func, names, label) do
+      start_metadata = %{schema: module, names: names} |> maybe_put_label(label)
 
       :telemetry.span([:modboss, :write], start_metadata, fn ->
-        {result, stats} = write_mappings(module, mappings, write_func)
+        {result, stats} = write_mappings(module, mappings, write_func, label)
 
         stop_measurements = %{
           objects_requested: stats.objects,
@@ -420,13 +438,13 @@ defmodule ModBoss do
       end)
     end
   else
-    defp do_writes(module, mappings, write_func, _names) do
-      {result, _} = write_mappings(module, mappings, write_func)
+    defp do_writes(module, mappings, write_func, _names, _label) do
+      {result, _} = write_mappings(module, mappings, write_func, _label = nil)
       result
     end
   end
 
-  defp write_mappings(module, mappings, write_func) do
+  defp write_mappings(module, mappings, write_func, label) do
     initial_stats = %{objects: 0, requests: 0}
 
     mappings
@@ -449,7 +467,7 @@ defmodule ModBoss do
       }
 
       names = Enum.map(batched_mappings, & &1.name)
-      write_func = instrument_write_callback(write_func, module, names, address_count)
+      write_func = instrument_write(write_func, module, names, address_count, label)
 
       case write_func.(first.type, first.starting_address, value_or_values) do
         :ok -> {:cont, {:ok, updated_stats}}
@@ -459,15 +477,17 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp instrument_write_callback(write_func, module, names, address_count) do
+    defp instrument_write(write_func, module, names, address_count, label) do
       fn type, starting_address, value_or_values ->
-        start_metadata = %{
-          schema: module,
-          names: names,
-          object_type: type,
-          starting_address: starting_address,
-          address_count: address_count
-        }
+        start_metadata =
+          %{
+            schema: module,
+            names: names,
+            object_type: type,
+            starting_address: starting_address,
+            address_count: address_count
+          }
+          |> maybe_put_label(label)
 
         :telemetry.span([:modboss, :write_callback], start_metadata, fn ->
           result = write_func.(type, starting_address, value_or_values)
@@ -478,8 +498,11 @@ defmodule ModBoss do
       end
     end
   else
-    defp instrument_write_callback(write_func, _, _, _), do: write_func
+    defp instrument_write_callback(write_func, _, _, _, _), do: write_func
   end
+
+  defp maybe_put_label(metadata, nil), do: metadata
+  defp maybe_put_label(metadata, label), do: Map.put(metadata, :label, label)
 
   @spec chunk_mappings([Mapping.t()], module(), :read | :write, integer()) ::
           [{Mapping.object_type(), integer(), [any()]}]

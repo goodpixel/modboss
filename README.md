@@ -148,5 +148,4 @@ def deps do
 end
 ```
 
-See the `ModBoss` module documentation for the full list of events, measurements,
-and metadata.
+See `ModBoss.Telemetry` for the full list of events, measurements, and metadata.
