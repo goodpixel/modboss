@@ -191,7 +191,8 @@ defmodule ModBoss do
         largest_gap: max(stats.largest_gap, largest_gap)
       }
 
-      read_func = instrument_read_callback(read_func, module, gap_addresses, largest_gap)
+      names = Enum.map(mappings, & &1.name)
+      read_func = instrument_read_callback(read_func, module, names, gap_addresses, largest_gap)
 
       case read_batch(read_func, first.type, starting_address, address_count) do
         {:ok, batch_values} -> {:cont, {{:ok, Map.merge(values, batch_values)}, updated_stats}}
@@ -201,10 +202,11 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp instrument_read_callback(read_func, module, gap_addresses, largest_gap) do
+    defp instrument_read_callback(read_func, module, names, gap_addresses, largest_gap) do
       fn type, starting_address, address_count ->
         start_metadata = %{
           schema: module,
+          names: names,
           object_type: type,
           starting_address: starting_address,
           address_count: address_count
@@ -225,7 +227,7 @@ defmodule ModBoss do
       end
     end
   else
-    defp instrument_read_callback(read_func, _, _, _), do: read_func
+    defp instrument_read_callback(read_func, _, _, _, _), do: read_func
   end
 
   @spec read_batch(fun(), any(), integer(), integer()) :: {:ok, map()} | {:error, any()}
@@ -446,7 +448,8 @@ defmodule ModBoss do
         requests: stats.requests + 1
       }
 
-      write_func = instrument_write_callback(write_func, module, address_count)
+      names = Enum.map(batched_mappings, & &1.name)
+      write_func = instrument_write_callback(write_func, module, names, address_count)
 
       case write_func.(first.type, first.starting_address, value_or_values) do
         :ok -> {:cont, {:ok, updated_stats}}
@@ -456,10 +459,11 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp instrument_write_callback(write_func, module, address_count) do
+    defp instrument_write_callback(write_func, module, names, address_count) do
       fn type, starting_address, value_or_values ->
         start_metadata = %{
           schema: module,
+          names: names,
           object_type: type,
           starting_address: starting_address,
           address_count: address_count
@@ -474,7 +478,7 @@ defmodule ModBoss do
       end
     end
   else
-    defp instrument_write_callback(write_func, _, _), do: write_func
+    defp instrument_write_callback(write_func, _, _, _), do: write_func
   end
 
   @spec chunk_mappings([Mapping.t()], module(), :read | :write, integer()) ::

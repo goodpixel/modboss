@@ -84,6 +84,7 @@ defmodule ModBoss.TelemetryTest do
 
       assert is_integer(start_measurements.system_time)
       assert start_metadata.schema == TestSchema
+      assert start_metadata.names == [:foo]
       assert start_metadata.object_type == :holding_register
       assert start_metadata.starting_address == 1
       assert start_metadata.address_count == 1
@@ -97,6 +98,7 @@ defmodule ModBoss.TelemetryTest do
       assert stop_measurements.gap_addresses_read == 0
       assert stop_measurements.max_gap_size == 0
       assert stop_metadata.schema == TestSchema
+      assert stop_metadata.names == [:foo]
       assert stop_metadata.object_type == :holding_register
       assert stop_metadata.starting_address == 1
       assert stop_metadata.address_count == 1
@@ -125,6 +127,12 @@ defmodule ModBoss.TelemetryTest do
 
       types = Enum.sort([meta1.object_type, meta2.object_type])
       assert types == [:coil, :holding_register]
+
+      # Each callback only includes names for its batch
+      hr_meta = Enum.find([meta1, meta2], &(&1.object_type == :holding_register))
+      coil_meta = Enum.find([meta1, meta2], &(&1.object_type == :coil))
+      assert Enum.sort(hr_meta.names) == [:bar, :foo]
+      assert coil_meta.names == [:grault]
     end
 
     test "emits correct counts for multi-address mappings", %{device: device} do
@@ -399,6 +407,7 @@ defmodule ModBoss.TelemetryTest do
 
       assert is_integer(start_measurements.system_time)
       assert start_metadata.schema == TestSchema
+      assert start_metadata.names == [:baz]
       assert start_metadata.object_type == :holding_register
       assert start_metadata.starting_address == 3
       assert start_metadata.address_count == 1
@@ -409,6 +418,7 @@ defmodule ModBoss.TelemetryTest do
 
       assert is_integer(stop_measurements.duration)
       assert stop_metadata.schema == TestSchema
+      assert stop_metadata.names == [:baz]
       assert stop_metadata.object_type == :holding_register
       assert stop_metadata.starting_address == 3
       assert stop_metadata.address_count == 1
@@ -433,6 +443,10 @@ defmodule ModBoss.TelemetryTest do
       # baz(3) + blah(4) are batched into one callback spanning 2 addresses
       hr_meta = Enum.find([meta1, meta2], &(&1.object_type == :holding_register))
       assert hr_meta.address_count == 2
+      assert hr_meta.names == [:baz, :blah]
+
+      coil_meta = Enum.find([meta1, meta2], &(&1.object_type == :coil))
+      assert coil_meta.names == [:grault]
     end
 
     test "emits correct counts for multi-address writes", %{device: device} do

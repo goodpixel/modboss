@@ -37,12 +37,12 @@ defmodule ModBoss.Telemetry do
 
   | Event | Measurements | Metadata |
   |---|---|---|
-  | `[:modboss, :read_callback, :start]` | `system_time`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count` |
-  | `[:modboss, :read_callback, :stop]` | `duration`, `monotonic_time`, `gap_addresses_read`, `max_gap_size` | `schema`, `object_type`, `starting_address`, `address_count`, `result` |
-  | `[:modboss, :read_callback, :exception]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
-  | `[:modboss, :write_callback, :start]` | `system_time`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count` |
-  | `[:modboss, :write_callback, :stop]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `result` |
-  | `[:modboss, :write_callback, :exception]` | `duration`, `monotonic_time` | `schema`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
+  | `[:modboss, :read_callback, :start]` | `system_time`, `monotonic_time` | `schema`, `names`, `object_type`, `starting_address`, `address_count` |
+  | `[:modboss, :read_callback, :stop]` | `duration`, `monotonic_time`, `gap_addresses_read`, `max_gap_size` | `schema`, `names`, `object_type`, `starting_address`, `address_count`, `result` |
+  | `[:modboss, :read_callback, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
+  | `[:modboss, :write_callback, :start]` | `system_time`, `monotonic_time` | `schema`, `names`, `object_type`, `starting_address`, `address_count` |
+  | `[:modboss, :write_callback, :stop]` | `duration`, `monotonic_time` | `schema`, `names`, `object_type`, `starting_address`, `address_count`, `result` |
+  | `[:modboss, :write_callback, :exception]` | `duration`, `monotonic_time` | `schema`, `names`, `object_type`, `starting_address`, `address_count`, `kind`, `reason`, `stacktrace` |
 
   ## Measurement details
 
@@ -67,7 +67,8 @@ defmodule ModBoss.Telemetry do
   ## Metadata details
 
   * `schema` — the schema module (e.g. `MyDevice.Schema`).
-  * `names` — the requested mapping name(s) as a list of atoms.
+  * `names` — mapping name(s) as a list of atoms. On per-operation events, all
+    requested names; on per-callback events, only the names in that batch.
   * `result` — the raw result: `{:ok, value}` or `{:error, reason}` for reads;
     `:ok` or `{:error, reason}` for writes.
   * `object_type` — `:holding_register`, `:input_register`, `:coil`, or `:discrete_input`.
