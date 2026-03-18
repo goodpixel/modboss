@@ -54,7 +54,7 @@ defmodule ModBoss do
       mappings will be included in gap reads. To opt a readable mapping out of
       gap reads, specify `gap_safe: false` on that mapping. See the `:gap_safe`
       option in `ModBoss.Schema` for details.
-    * `:debug` — if `true`, returns the full `%ModBoss.Mapping{}` struct(s);
+    * `:debug` — if `true`, returns a map of mapping details instead of just the value;
       defaults to `false`
     * `:decode` — if `false`, ModBoss doesn't attempt to decode the retrieved values;
       defaults to `true`. This option can be especially useful if you need insight
@@ -309,9 +309,17 @@ defmodule ModBoss do
     |> then(&{:ok, &1})
   end
 
-  defp collect_results(mappings, plurality, _, _debug = true) do
+  defp collect_results(mappings, plurality, field_to_return, _debug = true) do
     mappings
-    |> Enum.map(&{&1.name, &1})
+    |> Enum.map(fn %Mapping{} = mapping ->
+      debug_map =
+        mapping
+        |> Map.take([:type, :as, :encoded_value, :mode, :gap_safe])
+        |> Map.put(:address_range, Mapping.address_range(mapping))
+        |> maybe_put_value(mapping, field_to_return)
+
+      {mapping.name, debug_map}
+    end)
     |> handle_plurality(plurality)
   end
 
@@ -320,6 +328,10 @@ defmodule ModBoss do
     |> Enum.map(&{&1.name, Map.fetch!(&1, field_to_return)})
     |> handle_plurality(plurality)
   end
+
+  # If we're not decoding, don't include the `:value` field in the debug output
+  defp maybe_put_value(debug_map, mapping, :value), do: Map.put(debug_map, :value, mapping.value)
+  defp maybe_put_value(debug_map, _mapping, :encoded_value), do: debug_map
 
   defp handle_plurality([{_name, value}], :singular), do: {:ok, value}
   defp handle_plurality(values, :plural), do: {:ok, Enum.into(values, %{})}
