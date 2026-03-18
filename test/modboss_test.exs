@@ -845,6 +845,133 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
     end
 
+    test "`gap_safe: false` prevents a mapping's addresses from being included in a gap read" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..1, :group_1
+          holding_register 2..3, :latch, gap_safe: false
+          holding_register 4..5, :group_2
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..5, %{}, fn i -> {{:holding_register, i}, i} end)
+      set_objects(device, values)
+
+      # Even with max_gap: 4, the gap can't be bridged because :latch is gap_safe: false
+      {:ok, result} = ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 4)
+
+      assert 2 = get_read_count(device)
+      assert %{group_1: [0, 1], group_2: [4, 5]} = result
+    end
+
+    test "gap_safe defaults to true for readable mappings, allowing addresses to be included in a gap read" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..1, :group_1
+          holding_register 2..3, :filler
+          holding_register 4..5, :group_2
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..5, %{}, fn i -> {{:holding_register, i}, i} end)
+      set_objects(device, values)
+
+      # Since `:filler` is readable, it defaults to `gap_safe: true`; this should be a single read…
+      {:ok, result} = ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 2)
+
+      assert 1 = get_read_count(device)
+      assert %{group_1: [0, 1], group_2: [4, 5]} = result
+    end
+
+    test "gap_safe: false on one mapping in a multi-address gap blocks the entire gap" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..1, :group_1
+          holding_register 2, :safe_filler
+          holding_register 3, :unsafe_filler, gap_safe: false
+          holding_register 4..5, :group_2
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..5, %{}, fn i -> {{:holding_register, i}, i} end)
+      set_objects(device, values)
+
+      # The gap spans addresses 2-3. Address 3 is gap_safe: false, so the gap can't be bridged.
+      {:ok, result} =
+        ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 4)
+
+      assert 2 = get_read_count(device)
+      assert %{group_1: [0, 1], group_2: [4, 5]} = result
+    end
+
+    test "`gap_safe: false` mappings can still be read when explicitly requested" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0, :safe
+          holding_register 1, :latch, gap_safe: false
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 0} => 10, {:holding_register, 1} => 20})
+
+      {:ok, result} = ModBoss.read(schema, read_func(device), [:safe, :latch])
+      assert %{safe: 10, latch: 20} = result
+    end
+
+    test "write-only mappings are not included in gap reads" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 0..1, :group_1
+          holding_register 2..3, :write_only, mode: :w
+          holding_register 4..5, :group_2
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..5, %{}, fn i -> {{:holding_register, i}, i} end)
+      set_objects(device, values)
+
+      # Write-only mapping in the gap means the gap can't be bridged as a single read
+      {:ok, result} = ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 4)
+
+      assert 2 = get_read_count(device)
+      assert %{group_1: [0, 1], group_2: [4, 5]} = result
+    end
+
     test "debug mode returns a single Mapping struct for a singular read" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       encode_and_set(device, FakeSchema, foo: 123)

@@ -16,7 +16,8 @@ defmodule ModBoss.Mapping do
           as: atom() | {module(), atom()},
           value: any(),
           encoded_value: integer() | [integer()],
-          mode: :r | :rw | :w
+          mode: :r | :rw | :w,
+          gap_safe: boolean()
         }
 
   defstruct [
@@ -27,7 +28,8 @@ defmodule ModBoss.Mapping do
     :as,
     :value,
     :encoded_value,
-    :mode
+    :mode,
+    :gap_safe
   ]
 
   defguardp is_address_or_range(address) when is_integer(address) or is_struct(address, Range)
@@ -43,22 +45,26 @@ defmodule ModBoss.Mapping do
       end
 
     as = Keyword.get(opts, :as) |> expand_as(module)
+    mode = Keyword.get(opts, :mode, :r)
+    gap_safe = Keyword.get_lazy(opts, :gap_safe, fn -> mode in [:r, :rw] end)
 
     opts =
       Keyword.merge(opts,
+        mode: mode,
         name: name,
         type: type,
         starting_address: address_range.first,
         address_count: address_range.last - address_range.first + 1,
-        as: as
+        as: as,
+        gap_safe: gap_safe
       )
 
     __MODULE__
-    |> struct(%{mode: :r})
     |> struct!(opts)
     |> validate!(:type)
     |> validate!(:mode)
     |> validate!(:as)
+    |> validate!(:gap_safe)
   end
 
   @doc """
@@ -99,6 +105,14 @@ defmodule ModBoss.Mapping do
       {type, mode} -> raise("Invalid mode #{inspect(mode)} for #{type} #{inspect(mapping.name)}")
     end
   end
+
+  defp validate!(%{gap_safe: false} = mapping, :gap_safe), do: mapping
+
+  defp validate!(%{gap_safe: true, mode: :w} = mapping, :gap_safe) do
+    raise "gap_safe: true is not allowed on write-only mapping #{inspect(mapping.name)}"
+  end
+
+  defp validate!(%{gap_safe: true} = mapping, :gap_safe), do: mapping
 
   defp validate!(%{as: nil} = mapping, :as), do: mapping
 

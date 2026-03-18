@@ -140,6 +140,11 @@ defmodule ModBoss.Schema do
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
+  * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
+    when bridging a gap between other requested mappings (default: `true` for readable
+    mappings, `false` for write-only). You should set this to `false` for any register
+    that triggers side effects when read (e.g. clear-on-read registers). See the
+    `:max_gap` option in `ModBoss.read/4` for details on gap tolerance.
   """
   defmacro holding_register(addresses, name, opts \\ []) do
     ModBoss.Schema.validate_name!(__CALLER__, name)
@@ -156,6 +161,11 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
+  * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
+    when bridging a gap between other requested mappings (default: `true`). You should
+    set this to `false` for any register that triggers side effects when read (e.g.
+    clear-on-read registers). See the `:max_gap` option in `ModBoss.read/4` for details
+    on gap tolerance.
   """
   defmacro input_register(addresses, name, opts \\ []) do
     ModBoss.Schema.validate_name!(__CALLER__, name)
@@ -173,6 +183,11 @@ defmodule ModBoss.Schema do
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
+  * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
+    when bridging a gap between other requested mappings (default: `true` for readable
+    mappings, `false` for write-only). You should set this to `false` for any coil
+    that triggers side effects when read (e.g. clear-on-read coils). See the `:max_gap`
+    option in `ModBoss.read/4` for details on gap tolerance.
   """
   defmacro coil(addresses, name, opts \\ []) do
     ModBoss.Schema.validate_name!(__CALLER__, name)
@@ -189,6 +204,11 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
+  * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
+    when bridging a gap between other requested mappings (default: `true`). You should
+    set this to `false` for any input that triggers side effects when read (e.g.
+    clear-on-read inputs). See the `:max_gap` option in `ModBoss.read/4` for details
+    on gap tolerance.
   """
   defmacro discrete_input(addresses, name, opts \\ []) do
     ModBoss.Schema.validate_name!(__CALLER__, name)
