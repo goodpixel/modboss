@@ -544,7 +544,7 @@ defmodule ModBoss do
       end
     end
   else
-    defp instrument_write_callback(write_func, _, _, _, _), do: write_func
+    defp instrument_write(write_func, _, _, _, _), do: write_func
   end
 
   defp maybe_put_label(metadata, nil), do: metadata
