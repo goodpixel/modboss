@@ -49,8 +49,11 @@ defmodule ModBoss do
   ## Opts
     * `:max_gap` — Allows reading across unrequested gaps to reduce the overall
       number of requests that need to be made. Results from gaps will be
-      retrieved and discarded. This value can be specified as an integer
-      (which applies to all types) or per object type.
+      retrieved and discarded. This value can be specified as a single integer
+      (which applies to all types) or per object type. Only readable ModBoss
+      mappings will be included in gap reads. To opt a readable mapping out of
+      gap reads, specify `gap_safe: false` on that mapping. See the `:gap_safe`
+      option in `ModBoss.Schema` for details.
     * `:debug` — if `true`, returns the full `%ModBoss.Mapping{}` struct(s);
       defaults to `false`
     * `:decode` — if `false`, ModBoss doesn't attempt to decode the retrieved values;
@@ -59,6 +62,37 @@ defmodule ModBoss do
     * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
       event metadata. Useful for identifying which device or connection a
       request belongs to. See `ModBoss.Telemetry` for details.
+
+  > #### Gaps {: .info}
+  >
+  > Every Modbus request incurs network round-trip overhead, so fewer, larger reads
+  > are often faster than many small ones—even if some of the addresses in between
+  > aren't needed.
+  >
+  > The `:max_gap` option allows you to specify how many unrequested addresses
+  > you're willing to include in a single read in order to bridge the gap between
+  > requested mappings and reduce the total number of requests.
+  > If enabled, **a single request may bridge multiple gaps, each up to that size.**
+  >
+  > A gap will only be bridged if **every** address within it belongs to a
+  > known, gap-safe mapping (`gap_safe: true`, the default for readable mappings).
+  > Unmapped addresses and mappings with `gap_safe: false` both prevent a gap
+  > from being bridged.
+  >
+  > For example, given this schema:
+  >
+  >     schema do
+  >       holding_register 1, :temp, as: {ModBoss.Encoding, :signed_int}
+  >       holding_register 2, :status, as: {ModBoss.Encoding, :unsigned_int}
+  >       holding_register 3, :error_count, as: {ModBoss.Encoding, :unsigned_int}, gap_safe: false
+  >       holding_register 4, :mode, as: {ModBoss.Encoding, :unsigned_int}
+  >       holding_register 5, :humidity, as: {ModBoss.Encoding, :unsigned_int}
+  >     end
+  >
+  > Reading `:temp` and `:humidity` with `max_gap: 5` will **not** batch them
+  > into a single request because address 3 (`:error_count`) is not gap-safe.
+  > Removing `:error_count` from the schema wouldn't help either—the address
+  > would then be unmapped, which also prevents bridging.
 
   ## Examples
 
@@ -509,14 +543,14 @@ defmodule ModBoss do
   defp chunk_mappings(mappings, module, mode, max_gaps) do
     max_gaps = normalize_max_gap(max_gaps)
 
-    # Build a set of {type, address} pairs for all readable mapped registers.
+    # Build a set of {type, address} pairs for all gap-safe objects.
     # During reads, gap tolerance must only bridge gaps where every address
-    # in the gap belongs to a known, readable mapping.
-    readable_addresses =
+    # in the gap belongs to a known gap-safe mapping.
+    gap_safe_addresses =
       if mode == :read do
         module.__modboss_schema__()
         |> Map.values()
-        |> Enum.filter(&Mapping.readable?/1)
+        |> Enum.filter(& &1.gap_safe)
         |> Enum.flat_map(fn mapping ->
           mapping |> Mapping.address_range() |> Enum.map(&{mapping.type, &1})
         end)
@@ -541,7 +575,7 @@ defmodule ModBoss do
           max_gap = if mode == :write, do: 0, else: Map.fetch!(max_gaps, mapping.type)
           total_addresses = running_count + gap.size + mapping.address_count
 
-          if total_addresses <= max_chunk and allow_gap?(gap, mode, max_gap, readable_addresses) do
+          if total_addresses <= max_chunk and allow_gap?(gap, mode, max_gap, gap_safe_addresses) do
             running_gap_count = running_gap_count + gap.size
             largest_gap = max(largest_gap, gap.size)
 
@@ -577,11 +611,11 @@ defmodule ModBoss do
     }
   end
 
-  defp allow_gap?(gap, mode, max_gap, readable_addresses) when mode in [:read, :write] do
+  defp allow_gap?(gap, mode, max_gap, gap_safe_addresses) when mode in [:read, :write] do
     cond do
       gap.size == 0 -> true
       mode == :write -> false
-      mode == :read -> gap.size <= max_gap and MapSet.subset?(gap.addresses, readable_addresses)
+      mode == :read -> gap.size <= max_gap and MapSet.subset?(gap.addresses, gap_safe_addresses)
     end
   end
 

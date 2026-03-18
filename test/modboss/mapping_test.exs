@@ -49,6 +49,40 @@ defmodule ModBoss.MappingTest do
     end
   end
 
+  describe "gap_safe" do
+    test "defaults to true for readable mappings" do
+      for mode <- [:r, :rw] do
+        mapping = Mapping.new(__MODULE__, :foo, :holding_register, 1, mode: mode)
+        assert mapping.gap_safe == true
+      end
+    end
+
+    test "defaults to false for write-only mappings" do
+      mapping = Mapping.new(__MODULE__, :foo, :holding_register, 1, mode: :w)
+      assert mapping.gap_safe == false
+    end
+
+    test "can be explicitly set to false on readable mappings" do
+      for mode <- [:r, :rw] do
+        mapping = Mapping.new(__MODULE__, :foo, :holding_register, 1, mode: mode, gap_safe: false)
+        assert mapping.gap_safe == false
+      end
+    end
+
+    test "can be explicitly set to true on readable mappings" do
+      for mode <- [:r, :rw] do
+        mapping = Mapping.new(__MODULE__, :foo, :holding_register, 1, mode: mode, gap_safe: true)
+        assert mapping.gap_safe == true
+      end
+    end
+
+    test "raises when set to true on a write-only mapping" do
+      assert_raise RuntimeError, ~r/gap_safe: true is not allowed on write-only/, fn ->
+        Mapping.new(__MODULE__, :foo, :holding_register, 1, mode: :w, gap_safe: true)
+      end
+    end
+  end
+
   describe "address_range/1" do
     mapping = Mapping.new(__MODULE__, :foo, :holding_register, 3)
     assert 3..3 = Mapping.address_range(mapping)
