@@ -66,6 +66,13 @@ defmodule ModBoss do
       event metadata. Useful for identifying which device or connection a
       request belongs to. See `ModBoss.Telemetry` for details.
 
+  > #### Callback exceptions are rescued {: .warning}
+  >
+  > If `read_func` raises an exception, ModBoss rescues it and returns
+  > `{:error, exception}`. This applies regardless of the `:max_attempts`
+  > setting. The exception and stacktrace will be available via
+  > [per-callback telemetry events](`ModBoss.Telemetry`).
+
   > #### Gaps {: .info}
   >
   > Every Modbus request incurs network round-trip overhead, so fewer, larger reads
@@ -423,6 +430,13 @@ defmodule ModBoss do
   >
   > Each batch will contain **either a list or an individual value** based on the number of
   > addresses to be written—so you should be prepared for both.
+
+  > #### Callback exceptions are rescued {: .warning}
+  >
+  > If `write_func` raises an exception, ModBoss rescues it and returns
+  > `{:error, exception}`. This applies regardless of the `:max_attempts`
+  > setting. The exception and stacktrace will be available via
+  > [per-callback telemetry events](`ModBoss.Telemetry`).
 
   > #### Non-atomic writes! {: .warning}
   >
