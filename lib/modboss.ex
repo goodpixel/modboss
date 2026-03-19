@@ -759,10 +759,15 @@ defmodule ModBoss do
           updated_mapping = %{mapping | encoded_value: encoded_value}
           {:cont, {:ok, [updated_mapping | acc]}}
 
-        {:error, error} ->
-          # error = if is_binary(error), do: error, else: inspect(error)
+        {:error, error} when is_binary(error) ->
           message = "Failed to encode #{inspect(mapping.name)}. #{error}"
           {:halt, {:error, message}}
+
+        other ->
+          "Encoding #{inspect(mapping.name)} should return {:ok, term()} or {:error, string()}"
+          |> Logger.warning()
+
+          {:halt, {:error, "Failed to encode #{inspect(mapping.name)}. #{inspect(other)}"}}
       end
     end)
   end
@@ -776,7 +781,7 @@ defmodule ModBoss do
   end
 
   defp get_encode_mfa(%Mapping{as: {module, as}} = mapping) do
-    function = String.to_atom("encode_" <> "#{as}")
+    function = String.to_atom("encode_#{as}")
 
     if exists?(module, function, 2) do
       metadata = ModBoss.Encoding.Metadata.from_mapping(mapping)
@@ -797,9 +802,15 @@ defmodule ModBoss do
           updated_mapping = %{mapping | value: decoded_value}
           {:cont, {:ok, [updated_mapping | acc]}}
 
-        {:error, error} ->
+        {:error, error} when is_binary(error) ->
           message = "Failed to decode #{inspect(mapping.name)}. #{error}"
           {:halt, {:error, message}}
+
+        other ->
+          "Decoding #{inspect(mapping.name)} should return {:ok, term()} or {:error, string()}"
+          |> Logger.warning()
+
+          {:halt, {:error, "Failed to decode #{inspect(mapping.name)}. #{inspect(other)}"}}
       end
     end)
   end
@@ -811,7 +822,7 @@ defmodule ModBoss do
   end
 
   defp get_decode_mfa(%Mapping{as: {module, as}} = mapping) do
-    function = String.to_atom("decode_" <> "#{as}")
+    function = String.to_atom("decode_#{as}")
 
     if exists?(module, function, 1) do
       {module, function, [mapping.encoded_value]}
