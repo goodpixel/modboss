@@ -344,13 +344,7 @@ defmodule ModBoss do
         %{mapping | encoded_value: encoded_value}
 
       %Mapping{address_count: _plural} = mapping ->
-        addresses = Mapping.address_range(mapping) |> Enum.to_list()
-
-        encoded_values =
-          values
-          |> Map.take(addresses)
-          |> Enum.sort_by(fn {address, _value} -> address end)
-          |> Enum.map(fn {_address, value} -> value end)
+        encoded_values = for addr <- Mapping.address_range(mapping), do: Map.fetch!(values, addr)
 
         %{mapping | encoded_value: encoded_values}
     end)
