@@ -191,6 +191,9 @@ defmodule ModBoss do
         {result, stop_measurements, stop_metadata}
       end)
     end
+
+    defp maybe_put_label(metadata, nil), do: metadata
+    defp maybe_put_label(metadata, label), do: Map.put(metadata, :label, label)
   else
     defp do_reads(module, mappings, read_func, opts, _names) do
       {result, _} = read_mappings(module, mappings, read_func, opts, _label = nil)
@@ -650,9 +653,6 @@ defmodule ModBoss do
       raise "Invalid max_attempts: #{inspect(max_attempts)}. Must be a positive integer."
     end
   end
-
-  defp maybe_put_label(metadata, nil), do: metadata
-  defp maybe_put_label(metadata, label), do: Map.put(metadata, :label, label)
 
   @spec chunk_mappings([Mapping.t()], module(), :read | :write, integer()) ::
           [{Mapping.object_type(), integer(), [any()]}]
