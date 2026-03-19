@@ -60,8 +60,8 @@ defmodule ModBoss do
       defaults to `true`. This option can be especially useful if you need insight
       into a particular value that is failing to decode as expected.
     * `:max_attempts` — maximum number of times each `read_func` callback will
-      be attempted before giving up. Defaults to `1` (no retries). Only
-      `{:error, _}` triggers a retry; exceptions are not retried.
+      be attempted before giving up. Defaults to `1` (no retries). Callbacks that
+      raise an exception or return an error tuple will trigger a retry.
     * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
       event metadata. Useful for identifying which device or connection a
       request belongs to. See `ModBoss.Telemetry` for details.
@@ -310,7 +310,7 @@ defmodule ModBoss do
     result =
       with {:ok, value_or_values} <- raw_result do
         values = List.wrap(value_or_values)
-        value_count = Enum.count(values)
+        value_count = length(values)
 
         if value_count != address_count do
           raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
@@ -435,8 +435,8 @@ defmodule ModBoss do
 
   ## Opts
     * `:max_attempts` — maximum number of times each `write_func` callback will
-      be attempted before giving up. Defaults to `1` (no retries). Only
-      `{:error, _}` triggers a retry; exceptions are not retried.
+      be attempted before giving up. Defaults to `1` (no retries). Callbacks that
+      raise an exception or return an error tuple will trigger a retry.
     * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
       event metadata. Useful for identifying which device or connection a
       request belongs to. See `ModBoss.Telemetry` for details.
@@ -562,10 +562,10 @@ defmodule ModBoss do
 
       names = Enum.map(batched_mappings, & &1.name)
 
-      write_func =
+      wrapped_write =
         wrap_write_callback(write_func, module, names, address_count, max_attempts, label)
 
-      {result, attempts} = write_func.(first.type, first.starting_address, value_or_values)
+      {result, attempts} = wrapped_write.(first.type, first.starting_address, value_or_values)
 
       updated_stats = %{
         objects: stats.objects + address_count,
@@ -617,7 +617,14 @@ defmodule ModBoss do
 
   defp retry(max_attempts, func) do
     Enum.reduce_while(1..max_attempts, nil, fn attempt, _prev ->
-      case func.(attempt) do
+      result =
+        try do
+          func.(attempt)
+        rescue
+          e -> {:error, e}
+        end
+
+      case result do
         {:error, _} = error when attempt < max_attempts -> {:cont, error}
         result -> {:halt, {result, attempt}}
       end

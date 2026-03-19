@@ -13,6 +13,7 @@ defmodule ModBoss.MixProject do
         plt_add_apps: [:mix, :ex_unit],
         check_plt: true
       ],
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       description: description(),
       deps: deps(),
@@ -20,6 +21,9 @@ defmodule ModBoss.MixProject do
       package: package()
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do

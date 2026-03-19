@@ -1,5 +1,6 @@
 defmodule ModBoss.TelemetryTest do
   use ExUnit.Case, async: true
+  import ModBoss.CallbackHelpers
   @moduletag :capture_log
 
   defmodule TestSchema do
@@ -38,7 +39,6 @@ defmodule ModBoss.TelemetryTest do
       attach_many([
         [:modboss, :read, :start],
         [:modboss, :read, :stop],
-        [:modboss, :read, :exception],
         [:modboss, :read_callback, :start],
         [:modboss, :read_callback, :stop],
         [:modboss, :read_callback, :exception]
@@ -352,14 +352,14 @@ defmodule ModBoss.TelemetryTest do
       assert measurements.total_attempts == 2
     end
 
-    test "read retries emit per-attempt callback spans and total_attempts", %{device: device} do
+    test "retries emit per-attempt callback spans and total_attempts", %{device: device} do
       # 2 batches (holding_register + coil), each fails once before succeeding
       set_objects(device, %{
         {:holding_register, 1} => 10,
         {:coil, 100} => 1
       })
 
-      flaky_read = flaky_func(read_func(device), _fail_count = 1)
+      flaky_read = flakify(read_func(device), fn -> {:error, "flaky"} end, flakes: 1)
 
       # Each callback will be attempted twice for a total of 4 attempts in the end…
       {:ok, %{foo: 10, grault: 1}} =
@@ -392,64 +392,81 @@ defmodule ModBoss.TelemetryTest do
       assert measurements.total_attempts == 4
     end
 
-    test "exception on retry emits exception span with attempt metadata and stops retrying", %{
-      device: _device
-    } do
-      counter = :counters.new(1, [:atomics])
+    test "retries through exceptions and succeeds", %{device: device} do
+      set_objects(device, %{{:holding_register, 1} => 42})
+      raising_read = flakify(read_func(device), fn -> raise "raised!" end, flakes: 1)
 
-      read_func = fn _type, _addr, _count ->
-        attempt = :counters.get(counter, 1) + 1
-        :counters.add(counter, 1, 1)
+      {:ok, 42} = ModBoss.read(TestSchema, raising_read, :foo, max_attempts: 2)
 
-        case attempt do
-          1 -> {:error, "transient"}
-          2 -> raise "boom!"
-        end
-      end
-
-      assert_raise RuntimeError, "boom!", fn ->
-        ModBoss.read(TestSchema, read_func, :foo, max_attempts: 3)
-      end
-
-      # Attempt 1: error, normal stop span
-      assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, meta1}
+      # Attempt 1: raise, callback exception span
+      assert_receive {:telemetry, [:modboss, :read_callback, :exception], _, meta1}
       assert meta1.attempt == 1
-      assert meta1.max_attempts == 3
-      assert meta1.result == {:error, "transient"}
+      assert meta1.max_attempts == 2
 
-      # Attempt 2: raise, exception span
-      assert_receive {:telemetry, [:modboss, :read_callback, :exception], _, meta2}
+      # Attempt 2: success, callback stop span
+      assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, meta2}
       assert meta2.attempt == 2
-      assert meta2.max_attempts == 3
-      assert meta2.kind == :error
-      assert %RuntimeError{message: "boom!"} = meta2.reason
+      assert meta2.max_attempts == 2
+      assert {:ok, _} = meta2.result
 
-      # No attempt 3
-      assert :counters.get(counter, 1) == 2
+      # Outer span: normal stop, no exception
+      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, stop_meta}
+      assert measurements.total_attempts == 2
+      assert {:ok, _} = stop_meta.result
+      refute_receive {:telemetry, [:modboss, :read, :exception], _, _}
     end
 
-    test "emits exception event when read_func raises", %{device: _device} do
+    test "rescued read_func raise emits callback exception and outer stop with error", %{
+      device: _device
+    } do
       boom_func = fn _type, _addr, _count ->
         raise "boom!"
       end
 
-      assert_raise RuntimeError, "boom!", fn ->
-        ModBoss.read(TestSchema, boom_func, :foo)
-      end
+      {:error, %RuntimeError{message: "boom!"}} = ModBoss.read(TestSchema, boom_func, :foo)
 
-      assert_receive {:telemetry, [:modboss, :read_callback, :start], _, _}
-      assert_receive {:telemetry, [:modboss, :read_callback, :exception], measurements, metadata}
-      assert is_integer(measurements.duration)
-      assert metadata.kind == :error
-      assert metadata.attempt == 1
-      assert %RuntimeError{message: "boom!"} = metadata.reason
-      assert is_list(metadata.stacktrace)
+      # Callback-level: exception event with full metadata
+      assert_receive {:telemetry, [:modboss, :read_callback, :start], start_measurements,
+                      start_metadata}
 
-      assert_receive {:telemetry, [:modboss, :read, :start], _, _}
-      assert_receive {:telemetry, [:modboss, :read, :exception], measurements, metadata}
+      assert is_integer(start_measurements.system_time)
+      assert start_metadata.schema == TestSchema
+      assert start_metadata.names == [:foo]
+      assert start_metadata.object_type == :holding_register
+      assert start_metadata.starting_address == 1
+      assert start_metadata.address_count == 1
+      assert start_metadata.attempt == 1
+      assert start_metadata.max_attempts == 1
+
+      assert_receive {:telemetry, [:modboss, :read_callback, :exception], cb_measurements,
+                      cb_metadata}
+
+      assert is_integer(cb_measurements.duration)
+      assert cb_metadata.schema == TestSchema
+      assert cb_metadata.names == [:foo]
+      assert cb_metadata.object_type == :holding_register
+      assert cb_metadata.starting_address == 1
+      assert cb_metadata.address_count == 1
+      assert cb_metadata.attempt == 1
+      assert cb_metadata.max_attempts == 1
+      assert cb_metadata.kind == :error
+      assert %RuntimeError{message: "boom!"} = cb_metadata.reason
+      assert is_list(cb_metadata.stacktrace)
+
+      # Outer span: normal stop (not exception) with error result
+      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, metadata}
       assert is_integer(measurements.duration)
-      assert metadata.kind == :error
-      assert %RuntimeError{message: "boom!"} = metadata.reason
+      assert measurements.modbus_requests == 1
+      assert measurements.total_attempts == 1
+      assert measurements.objects_requested == 1
+      assert measurements.addresses_read == 1
+      assert measurements.gap_addresses_read == 0
+      assert measurements.max_gap_size == 0
+      assert metadata.schema == TestSchema
+      assert metadata.names == [:foo]
+      assert {:error, %RuntimeError{message: "boom!"}} = metadata.result
+
+      refute_receive {:telemetry, [:modboss, :read, :exception], _, _}
     end
 
     test "does not emit events for validation errors (e.g. unknown names)", %{device: device} do
@@ -482,11 +499,10 @@ defmodule ModBoss.TelemetryTest do
     test "includes label in exception metadata when telemetry_label is provided" do
       boom_func = fn _type, _addr, _count -> raise "boom!" end
 
-      assert_raise RuntimeError, "boom!", fn ->
+      {:error, %RuntimeError{}} =
         ModBoss.read(TestSchema, boom_func, :foo, telemetry_label: :my_device)
-      end
 
-      assert_receive {:telemetry, [:modboss, :read, :exception], _, meta}
+      assert_receive {:telemetry, [:modboss, :read, :stop], _, meta}
       assert meta.label == :my_device
 
       assert_receive {:telemetry, [:modboss, :read_callback, :exception], _, cb_meta}
@@ -519,7 +535,6 @@ defmodule ModBoss.TelemetryTest do
       attach_many([
         [:modboss, :write, :start],
         [:modboss, :write, :stop],
-        [:modboss, :write, :exception],
         [:modboss, :write_callback, :start],
         [:modboss, :write_callback, :stop],
         [:modboss, :write_callback, :exception]
@@ -679,8 +694,8 @@ defmodule ModBoss.TelemetryTest do
       assert measurements.total_attempts == 2
     end
 
-    test "write retries emit per-attempt callback spans and total_attempts", %{device: device} do
-      flaky_write = flaky_func(write_func(device), _fail_count = 1)
+    test "retries emit per-attempt callback spans and total_attempts", %{device: device} do
+      flaky_write = flakify(write_func(device), fn -> {:error, "flaky"} end, flakes: 1)
 
       :ok = ModBoss.write(TestSchema, flaky_write, [baz: 99], max_attempts: 3)
 
@@ -698,28 +713,55 @@ defmodule ModBoss.TelemetryTest do
       assert measurements.total_attempts == 2
     end
 
-    test "emits exception event when write_func raises", %{device: _device} do
+    test "rescued write_func raise emits callback exception and outer stop with error", %{
+      device: _device
+    } do
       kaboom_func = fn _type, _addr, _values ->
         raise "kaboom!"
       end
 
-      assert_raise RuntimeError, "kaboom!", fn ->
+      {:error, %RuntimeError{message: "kaboom!"}} =
         ModBoss.write(TestSchema, kaboom_func, baz: 1)
-      end
 
-      assert_receive {:telemetry, [:modboss, :write_callback, :start], _, _}
-      assert_receive {:telemetry, [:modboss, :write_callback, :exception], measurements, metadata}
-      assert is_integer(measurements.duration)
-      assert metadata.kind == :error
-      assert metadata.attempt == 1
-      assert %RuntimeError{message: "kaboom!"} = metadata.reason
-      assert is_list(metadata.stacktrace)
+      # Callback-level: exception event with full metadata
+      assert_receive {:telemetry, [:modboss, :write_callback, :start], start_measurements,
+                      start_metadata}
 
-      assert_receive {:telemetry, [:modboss, :write, :start], _, _}
-      assert_receive {:telemetry, [:modboss, :write, :exception], measurements, metadata}
+      assert is_integer(start_measurements.system_time)
+      assert start_metadata.schema == TestSchema
+      assert start_metadata.names == [:baz]
+      assert start_metadata.object_type == :holding_register
+      assert start_metadata.starting_address == 3
+      assert start_metadata.address_count == 1
+      assert start_metadata.attempt == 1
+      assert start_metadata.max_attempts == 1
+
+      assert_receive {:telemetry, [:modboss, :write_callback, :exception], cb_measurements,
+                      cb_metadata}
+
+      assert is_integer(cb_measurements.duration)
+      assert cb_metadata.schema == TestSchema
+      assert cb_metadata.names == [:baz]
+      assert cb_metadata.object_type == :holding_register
+      assert cb_metadata.starting_address == 3
+      assert cb_metadata.address_count == 1
+      assert cb_metadata.attempt == 1
+      assert cb_metadata.max_attempts == 1
+      assert cb_metadata.kind == :error
+      assert %RuntimeError{message: "kaboom!"} = cb_metadata.reason
+      assert is_list(cb_metadata.stacktrace)
+
+      # Outer span: normal stop (not exception) with error result
+      assert_receive {:telemetry, [:modboss, :write, :stop], measurements, metadata}
       assert is_integer(measurements.duration)
-      assert metadata.kind == :error
-      assert %RuntimeError{message: "kaboom!"} = metadata.reason
+      assert measurements.modbus_requests == 1
+      assert measurements.total_attempts == 1
+      assert measurements.objects_requested == 1
+      assert metadata.schema == TestSchema
+      assert metadata.names == [:baz]
+      assert {:error, %RuntimeError{message: "kaboom!"}} = metadata.result
+
+      refute_receive {:telemetry, [:modboss, :write, :exception], _, _}
     end
 
     test "does not emit events for validation errors (e.g. unknown names)", %{device: device} do
@@ -750,14 +792,36 @@ defmodule ModBoss.TelemetryTest do
       assert cb_stop_metadata.label == %{port: :rs485, address: 12}
     end
 
+    test "retries through exceptions and succeeds", %{device: device} do
+      raising_write = flakify(write_func(device), fn -> raise "raised!" end, flakes: 1)
+
+      :ok = ModBoss.write(TestSchema, raising_write, [baz: 99], max_attempts: 2)
+
+      # Attempt 1: raise, callback exception span
+      assert_receive {:telemetry, [:modboss, :write_callback, :exception], _, meta1}
+      assert meta1.attempt == 1
+      assert meta1.max_attempts == 2
+
+      # Attempt 2: success, callback stop span
+      assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, meta2}
+      assert meta2.attempt == 2
+      assert meta2.max_attempts == 2
+      assert meta2.result == :ok
+
+      # Outer span: normal stop, no exception
+      assert_receive {:telemetry, [:modboss, :write, :stop], measurements, stop_meta}
+      assert measurements.total_attempts == 2
+      assert stop_meta.result == :ok
+      refute_receive {:telemetry, [:modboss, :write, :exception], _, _}
+    end
+
     test "includes label in exception metadata when telemetry_label is provided" do
       kaboom_func = fn _type, _addr, _values -> raise "kaboom!" end
 
-      assert_raise RuntimeError, "kaboom!", fn ->
+      {:error, %RuntimeError{}} =
         ModBoss.write(TestSchema, kaboom_func, [baz: 1], telemetry_label: :my_device)
-      end
 
-      assert_receive {:telemetry, [:modboss, :write, :exception], _, meta}
+      assert_receive {:telemetry, [:modboss, :write, :stop], _, meta}
       assert meta.label == :my_device
 
       assert_receive {:telemetry, [:modboss, :write_callback, :exception], _, cb_meta}
@@ -840,22 +904,6 @@ defmodule ModBoss.TelemetryTest do
         updated_objects = Map.merge(state.objects, objects)
         %{state | objects: updated_objects, writes: state.writes + 1}
       end)
-    end
-  end
-
-  defp flaky_func(inner_func, fail_count) do
-    counter = :counters.new(1, [:atomics])
-
-    fn type, starting_address, value_or_count ->
-      attempt = :counters.get(counter, 1) + 1
-      :counters.add(counter, 1, 1)
-
-      if attempt <= fail_count do
-        {:error, "flaky"}
-      else
-        :counters.put(counter, 1, 0)
-        inner_func.(type, starting_address, value_or_count)
-      end
     end
   end
 
