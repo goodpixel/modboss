@@ -90,6 +90,7 @@ defmodule ModBoss.TelemetryTest do
       assert start_metadata.starting_address == 1
       assert start_metadata.address_count == 1
       assert start_metadata.attempt == 1
+      assert start_metadata.max_attempts == 1
 
       # Per-request stop
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], stop_measurements,
@@ -105,6 +106,7 @@ defmodule ModBoss.TelemetryTest do
       assert stop_metadata.starting_address == 1
       assert stop_metadata.address_count == 1
       assert stop_metadata.attempt == 1
+      assert stop_metadata.max_attempts == 1
       assert stop_metadata.result == {:ok, 42}
     end
 
@@ -366,19 +368,23 @@ defmodule ModBoss.TelemetryTest do
       # Batch 1: attempt 1 fails, attempt 2 succeeds
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, cb1_attempt1}
       assert cb1_attempt1.attempt == 1
+      assert cb1_attempt1.max_attempts == 2
       assert cb1_attempt1.result == {:error, "flaky"}
 
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, cb1_attempt2}
       assert cb1_attempt2.attempt == 2
+      assert cb1_attempt2.max_attempts == 2
       assert {:ok, _} = cb1_attempt2.result
 
       # Batch 2: same pattern
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, cb2_attempt1}
       assert cb2_attempt1.attempt == 1
+      assert cb2_attempt1.max_attempts == 2
       assert {:error, "flaky"} = cb2_attempt1.result
 
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, cb2_attempt2}
       assert cb2_attempt2.attempt == 2
+      assert cb2_attempt2.max_attempts == 2
       assert {:ok, _} = cb2_attempt2.result
 
       # Outer span: 2 batches x 2 attempts = 4 total
@@ -408,11 +414,13 @@ defmodule ModBoss.TelemetryTest do
       # Attempt 1: error, normal stop span
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, meta1}
       assert meta1.attempt == 1
+      assert meta1.max_attempts == 3
       assert meta1.result == {:error, "transient"}
 
       # Attempt 2: raise, exception span
       assert_receive {:telemetry, [:modboss, :read_callback, :exception], _, meta2}
       assert meta2.attempt == 2
+      assert meta2.max_attempts == 3
       assert meta2.kind == :error
       assert %RuntimeError{message: "boom!"} = meta2.reason
 
@@ -678,10 +686,12 @@ defmodule ModBoss.TelemetryTest do
 
       assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, attempt1}
       assert attempt1.attempt == 1
+      assert attempt1.max_attempts == 3
       assert attempt1.result == {:error, "flaky"}
 
       assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, attempt2}
       assert attempt2.attempt == 2
+      assert attempt2.max_attempts == 3
       assert attempt2.result == :ok
 
       assert_receive {:telemetry, [:modboss, :write, :stop], measurements, _}

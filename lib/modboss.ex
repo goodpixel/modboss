@@ -269,7 +269,7 @@ defmodule ModBoss do
            label
          ) do
       fn type, starting_address, address_count ->
-        base_metadata =
+        metadata =
           %{
             schema: module,
             names: names,
@@ -280,7 +280,7 @@ defmodule ModBoss do
           |> maybe_put_label(label)
 
         retry(max_attempts, fn attempt ->
-          start_metadata = Map.put(base_metadata, :attempt, attempt)
+          start_metadata = Map.merge(metadata, %{attempt: attempt, max_attempts: max_attempts})
 
           :telemetry.span([:modboss, :read_callback], start_metadata, fn ->
             result = read_func.(type, starting_address, address_count)
@@ -583,7 +583,7 @@ defmodule ModBoss do
   if Code.ensure_loaded?(:telemetry) do
     defp wrap_write_callback(write_func, module, names, address_count, max_attempts, label) do
       fn type, starting_address, value_or_values ->
-        base_metadata =
+        metadata =
           %{
             schema: module,
             names: names,
@@ -594,7 +594,7 @@ defmodule ModBoss do
           |> maybe_put_label(label)
 
         retry(max_attempts, fn attempt ->
-          start_metadata = Map.put(base_metadata, :attempt, attempt)
+          start_metadata = Map.merge(metadata, %{attempt: attempt, max_attempts: max_attempts})
 
           :telemetry.span([:modboss, :write_callback], start_metadata, fn ->
             result = write_func.(type, starting_address, value_or_values)

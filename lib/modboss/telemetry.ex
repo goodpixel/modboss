@@ -169,7 +169,8 @@ defmodule ModBoss.Telemetry do
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
-        attempt: pos_integer()
+        attempt: pos_integer(),
+        max_attempts: pos_integer()
       }
 
   ### Read Callback Stop
@@ -193,6 +194,7 @@ defmodule ModBoss.Telemetry do
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
         attempt: pos_integer(),
+        max_attempts: pos_integer(),
         result: term()
       }
 
@@ -215,6 +217,7 @@ defmodule ModBoss.Telemetry do
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
         attempt: pos_integer(),
+        max_attempts: pos_integer(),
         kind: atom(),
         reason: term(),
         stacktrace: list()
@@ -238,7 +241,8 @@ defmodule ModBoss.Telemetry do
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
-        attempt: pos_integer()
+        attempt: pos_integer(),
+        max_attempts: pos_integer()
       }
 
   ### Write Callback Stop
@@ -260,6 +264,7 @@ defmodule ModBoss.Telemetry do
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
         attempt: pos_integer(),
+        max_attempts: pos_integer(),
         result: term()
       }
 
@@ -282,6 +287,7 @@ defmodule ModBoss.Telemetry do
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
         attempt: pos_integer(),
+        max_attempts: pos_integer(),
         kind: atom(),
         reason: term(),
         stacktrace: list()
@@ -325,6 +331,7 @@ defmodule ModBoss.Telemetry do
   * `object_type` — `:holding_register`, `:input_register`, `:coil`, or `:discrete_input`.
   * `starting_address` — the starting address for the request.
   * `address_count` — number of addresses in the request.
-  * `attempt` — which attempted callback invocation this is, from 1 up to `:max_attempts`.
+  * `attempt` — which attempted callback invocation this is, from 1 up to `max_attempts`.
+  * `max_attempts` — the configured maximum number of attempts for this callback.
   """
 end
