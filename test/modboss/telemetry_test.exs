@@ -2,6 +2,7 @@ defmodule ModBoss.TelemetryTest do
   use ExUnit.Case, async: true
   import ModBoss.CallbackHelpers
   @moduletag :capture_log
+  @moduletag :telemetry
 
   defmodule TestSchema do
     use ModBoss.Schema
