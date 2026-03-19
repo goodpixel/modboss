@@ -1130,6 +1130,84 @@ defmodule ModBossTest do
                 value: "TS3000"
               }} = ModBoss.read(schema, read_func(device), :model_name, debug: true)
     end
+
+    test "max_attempts retries on error and succeeds" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      encode_and_set(device, FakeSchema, foo: 42)
+
+      flaky_read = flaky_func(read_func(device), _fail_count = 2)
+
+      assert {:ok, 42} = ModBoss.read(FakeSchema, flaky_read, :foo, max_attempts: 3)
+    end
+
+    test "max_attempts returns error when all attempts exhausted" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      encode_and_set(device, FakeSchema, foo: 42)
+
+      flaky_read = flaky_func(read_func(device), _fail_count = 2)
+
+      assert {:error, "flaky"} = ModBoss.read(FakeSchema, flaky_read, :foo, max_attempts: 2)
+    end
+
+    test "max_attempts retries are per-callback, not per-operation" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :alpha
+          coil 100, :bravo
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 10,
+        {:coil, 100} => 1
+      })
+
+      flaky_read = flaky_func(read_func(device), _fail_count = 1)
+
+      # This is 2 batches (due to different objects types) that will each fail once
+      # before succeeding. This means we'll make 2 attempts for each batch (4 total).
+      assert {:ok, %{alpha: 10, bravo: 1}} =
+               ModBoss.read(schema, flaky_read, [:alpha, :bravo], max_attempts: 2)
+    end
+
+    test "max_attempts does not retry on raise" do
+      call_count = start_supervised!({Agent, fn -> 0 end})
+
+      boom_func = fn _type, _addr, _count ->
+        Agent.update(call_count, &(&1 + 1))
+        raise "boom!"
+      end
+
+      assert_raise RuntimeError, "boom!", fn ->
+        ModBoss.read(FakeSchema, boom_func, :foo, max_attempts: 3)
+      end
+
+      assert Agent.get(call_count, & &1) == 1
+    end
+
+    test "max_attempts raises on invalid values" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, fn ->
+        ModBoss.read(FakeSchema, read_func(device), :foo, max_attempts: 0)
+      end
+
+      assert_raise RuntimeError, fn ->
+        ModBoss.read(FakeSchema, read_func(device), :foo, max_attempts: -1)
+      end
+
+      assert_raise RuntimeError, fn ->
+        ModBoss.read(FakeSchema, read_func(device), :foo, max_attempts: "foo")
+      end
+    end
   end
 
   describe "ModBoss.write/3" do
@@ -1363,6 +1441,35 @@ defmodule ModBossTest do
       assert 2 = get_write_count(device)
       assert %{{:holding_register, 1} => 10, {:holding_register, 3} => 50} = get_objects(device)
     end
+
+    test "max_attempts retries on error and succeeds" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      flaky_write = flaky_func(write_func(device), _fail_count = 2)
+
+      :ok = ModBoss.write(FakeSchema, flaky_write, [baz: 99], max_attempts: 3)
+      assert %{{:holding_register, 3} => 99} = get_objects(device)
+    end
+
+    test "max_attempts returns error when all attempts exhausted" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      flaky_write = flaky_func(write_func(device), _fail_count = 2)
+
+      {:error, "flaky"} = ModBoss.write(FakeSchema, flaky_write, [baz: 99], max_attempts: 2)
+    end
+
+    test "max_attempts raises on invalid values" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, fn ->
+        ModBoss.write(FakeSchema, write_func(device), [baz: 99], max_attempts: 0)
+      end
+
+      assert_raise RuntimeError, fn ->
+        ModBoss.write(FakeSchema, write_func(device), [baz: 99], max_attempts: -1)
+      end
+    end
   end
 
   describe "ModBoss.encode/2" do
@@ -1540,6 +1647,22 @@ defmodule ModBossTest do
   defp values(count) do
     for _i <- 1..count do
       1
+    end
+  end
+
+  defp flaky_func(inner_func, fail_count) do
+    counter = :counters.new(1, [:atomics])
+
+    fn type, starting_address, value_or_count ->
+      attempt = :counters.get(counter, 1) + 1
+      :counters.add(counter, 1, 1)
+
+      if attempt <= fail_count do
+        {:error, "flaky"}
+      else
+        :counters.put(counter, 1, 0)
+        inner_func.(type, starting_address, value_or_count)
+      end
     end
   end
 

@@ -59,6 +59,9 @@ defmodule ModBoss do
     * `:decode` — if `false`, ModBoss doesn't attempt to decode the retrieved values;
       defaults to `true`. This option can be especially useful if you need insight
       into a particular value that is failing to decode as expected.
+    * `:max_attempts` — maximum number of times each `read_func` callback will
+      be attempted before giving up. Defaults to `1` (no retries). Only
+      `{:error, _}` triggers a retry; exceptions are not retried.
     * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
       event metadata. Useful for identifying which device or connection a
       request belongs to. See `ModBoss.Telemetry` for details.
@@ -144,10 +147,12 @@ defmodule ModBoss do
       end
 
     opts =
-      case Keyword.split(opts, [:max_gap, :debug, :decode, :telemetry_label]) do
+      case Keyword.split(opts, [:max_gap, :max_attempts, :debug, :decode, :telemetry_label]) do
         {opts, []} -> Keyword.put(opts, :plurality, plurality)
         {_opts, unsupported_opts} -> raise "Unrecognized opts: #{inspect(unsupported_opts)}"
       end
+
+    validate_max_attempts!(Keyword.get(opts, :max_attempts, 1))
 
     {names, opts}
   end
@@ -171,7 +176,8 @@ defmodule ModBoss do
           modbus_requests: stats.requests,
           addresses_read: stats.addresses,
           gap_addresses_read: stats.gap_addresses,
-          max_gap_size: stats.largest_gap
+          max_gap_size: stats.largest_gap,
+          total_attempts: stats.total_attempts
         }
 
         stop_metadata = Map.put(start_metadata, :result, result)
@@ -187,6 +193,7 @@ defmodule ModBoss do
 
   defp read_mappings(module, mappings, read_func, opts, label) do
     max_gaps = Keyword.get(opts, :max_gap, %{})
+    max_attempts = Keyword.get(opts, :max_attempts, 1)
     debug = Keyword.get(opts, :debug, false)
     decode = Keyword.get(opts, :decode, true)
     plurality = Keyword.fetch!(opts, :plurality)
@@ -195,7 +202,7 @@ defmodule ModBoss do
     {read_result, stats} =
       mappings
       |> chunk_mappings(module, :read, max_gaps)
-      |> read_chunks(module, read_func, label)
+      |> read_chunks(module, read_func, max_attempts, label)
 
     with {:ok, values} <- read_result,
          {:ok, mappings} <- hydrate_values(mappings, values),
@@ -207,8 +214,16 @@ defmodule ModBoss do
     end
   end
 
-  defp read_chunks(chunks, module, read_func, label) do
-    initial_stats = %{objects: 0, requests: 0, addresses: 0, gap_addresses: 0, largest_gap: 0}
+  defp read_chunks(chunks, module, read_func, max_attempts, label) do
+    initial_stats = %{
+      objects: 0,
+      requests: 0,
+      addresses: 0,
+      gap_addresses: 0,
+      largest_gap: 0,
+      total_attempts: 0
+    }
+
     initial = {{:ok, %{}}, initial_stats}
 
     Enum.reduce_while(chunks, initial, fn {mappings, gap_addresses, largest_gap}, acc ->
@@ -216,23 +231,27 @@ defmodule ModBoss do
       [first | _rest] = mappings
       last = List.last(mappings)
 
+      names = Enum.map(mappings, & &1.name)
       starting_address = first.starting_address
       ending_address = last.starting_address + last.address_count - 1
       address_count = ending_address - starting_address + 1
       object_count = Enum.sum_by(mappings, & &1.address_count)
+
+      {result, callback_attempts} =
+        read_func
+        |> wrap_read_callback(module, names, gap_addresses, largest_gap, max_attempts, label)
+        |> read_batch(first.type, starting_address, address_count)
 
       updated_stats = %{
         objects: stats.objects + object_count,
         requests: stats.requests + 1,
         addresses: stats.addresses + address_count,
         gap_addresses: stats.gap_addresses + gap_addresses,
-        largest_gap: max(stats.largest_gap, largest_gap)
+        largest_gap: max(stats.largest_gap, largest_gap),
+        total_attempts: stats.total_attempts + callback_attempts
       }
 
-      names = Enum.map(mappings, & &1.name)
-      read_func = instrument_read(read_func, module, names, gap_addresses, largest_gap, label)
-
-      case read_batch(read_func, first.type, starting_address, address_count) do
+      case result do
         {:ok, batch_values} -> {:cont, {{:ok, Map.merge(values, batch_values)}, updated_stats}}
         {:error, error} -> {:halt, {{:error, error}, updated_stats}}
       end
@@ -240,9 +259,17 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp instrument_read(read_func, module, names, gap_addresses, largest_gap, label) do
+    defp wrap_read_callback(
+           read_func,
+           module,
+           names,
+           gap_addresses,
+           largest_gap,
+           max_attempts,
+           label
+         ) do
       fn type, starting_address, address_count ->
-        start_metadata =
+        base_metadata =
           %{
             schema: module,
             names: names,
@@ -252,41 +279,52 @@ defmodule ModBoss do
           }
           |> maybe_put_label(label)
 
-        :telemetry.span([:modboss, :read_callback], start_metadata, fn ->
-          result = read_func.(type, starting_address, address_count)
+        retry(max_attempts, fn attempt ->
+          start_metadata = Map.put(base_metadata, :attempt, attempt)
 
-          stop_measurements = %{
-            gap_addresses_read: gap_addresses,
-            max_gap_size: largest_gap
-          }
+          :telemetry.span([:modboss, :read_callback], start_metadata, fn ->
+            result = read_func.(type, starting_address, address_count)
+            stop_measurements = %{gap_addresses_read: gap_addresses, max_gap_size: largest_gap}
+            stop_metadata = Map.put(start_metadata, :result, result)
 
-          stop_metadata = Map.put(start_metadata, :result, result)
-
-          {result, stop_measurements, stop_metadata}
+            {result, stop_measurements, stop_metadata}
+          end)
         end)
       end
     end
   else
-    defp instrument_read(read_func, _, _, _, _, _), do: read_func
+    defp wrap_read_callback(read_func, _, _, _, _, max_attempts, _) do
+      fn type, starting_address, address_count ->
+        retry(max_attempts, fn _attempt ->
+          read_func.(type, starting_address, address_count)
+        end)
+      end
+    end
   end
 
-  @spec read_batch(fun(), any(), integer(), integer()) :: {:ok, map()} | {:error, any()}
+  @spec read_batch(fun(), atom(), non_neg_integer(), pos_integer()) ::
+          {{:ok, map()} | {:error, any()}, pos_integer()}
   defp read_batch(read_func, type, starting_address, address_count) do
-    with {:ok, value_or_values} <- read_func.(type, starting_address, address_count) do
-      values = List.wrap(value_or_values)
-      value_count = Enum.count(values)
+    {raw_result, attempts} = read_func.(type, starting_address, address_count)
 
-      if value_count != address_count do
-        raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
+    result =
+      with {:ok, value_or_values} <- raw_result do
+        values = List.wrap(value_or_values)
+        value_count = Enum.count(values)
+
+        if value_count != address_count do
+          raise "Attempted to read #{address_count} values starting from address #{starting_address} but received #{value_count} values."
+        end
+
+        batch_results =
+          values
+          |> Enum.with_index(starting_address)
+          |> Enum.into(%{}, fn {value, address} -> {address, value} end)
+
+        {:ok, batch_results}
       end
 
-      batch_results =
-        values
-        |> Enum.with_index(starting_address)
-        |> Enum.into(%{}, fn {value, address} -> {address, value} end)
-
-      {:ok, batch_results}
-    end
+    {result, attempts}
   end
 
   defp hydrate_values(mappings, values) do
@@ -396,6 +434,9 @@ defmodule ModBoss do
   > the function will immediately abort, and any subsequent writes will be skipped.
 
   ## Opts
+    * `:max_attempts` — maximum number of times each `write_func` callback will
+      be attempted before giving up. Defaults to `1` (no retries). Only
+      `{:error, _}` triggers a retry; exceptions are not retried.
     * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
       event metadata. Useful for identifying which device or connection a
       request belongs to. See `ModBoss.Telemetry` for details.
@@ -413,23 +454,31 @@ defmodule ModBoss do
   @spec write(module(), write_func(), values(), keyword()) :: :ok | {:error, any()}
   def write(module, write_func, values, opts \\ [])
       when is_atom(module) and is_function(write_func) do
-    {label, remaining_opts} = Keyword.pop(opts, :telemetry_label)
-
-    if remaining_opts != [] do
-      raise "Unrecognized opts: #{inspect(remaining_opts)}"
-    end
-
     names = get_keys(values)
+    opts = evaluate_write_opts(opts)
 
     with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values),
          {:ok, mappings} <- encode(mappings) do
-      do_writes(module, mappings, write_func, names, label)
+      do_writes(module, mappings, write_func, names, opts)
     end
   end
 
   defp get_keys(params) when is_map(params), do: Map.keys(params)
   defp get_keys(params) when is_list(params), do: Keyword.keys(params)
+
+  defp evaluate_write_opts(opts) do
+    {label, remaining_opts} = Keyword.pop(opts, :telemetry_label)
+    {max_attempts, remaining_opts} = Keyword.pop(remaining_opts, :max_attempts, 1)
+
+    if remaining_opts != [] do
+      raise "Unrecognized opts: #{inspect(remaining_opts)}"
+    end
+
+    validate_max_attempts!(max_attempts)
+
+    [telemetry_label: label, max_attempts: max_attempts]
+  end
 
   defp put_values(mappings, params) do
     for mapping <- mappings do
@@ -468,15 +517,18 @@ defmodule ModBoss do
   defp unwritable(mappings), do: Enum.reject(mappings, &Mapping.writable?/1)
 
   if Code.ensure_loaded?(:telemetry) do
-    defp do_writes(module, mappings, write_func, names, label) do
+    defp do_writes(module, mappings, write_func, names, opts) do
+      max_attempts = Keyword.get(opts, :max_attempts, 1)
+      label = Keyword.get(opts, :telemetry_label)
       start_metadata = %{schema: module, names: names} |> maybe_put_label(label)
 
       :telemetry.span([:modboss, :write], start_metadata, fn ->
-        {result, stats} = write_mappings(module, mappings, write_func, label)
+        {result, stats} = write_mappings(module, mappings, write_func, max_attempts, label)
 
         stop_measurements = %{
           objects_requested: stats.objects,
-          modbus_requests: stats.requests
+          modbus_requests: stats.requests,
+          total_attempts: stats.total_attempts
         }
 
         stop_metadata = Map.put(start_metadata, :result, result)
@@ -484,14 +536,15 @@ defmodule ModBoss do
       end)
     end
   else
-    defp do_writes(module, mappings, write_func, _names, _label) do
-      {result, _} = write_mappings(module, mappings, write_func, _label = nil)
+    defp do_writes(module, mappings, write_func, _names, opts) do
+      max_attempts = Keyword.get(opts, :max_attempts, 1)
+      {result, _} = write_mappings(module, mappings, write_func, max_attempts, _label = nil)
       result
     end
   end
 
-  defp write_mappings(module, mappings, write_func, label) do
-    initial_stats = %{objects: 0, requests: 0}
+  defp write_mappings(module, mappings, write_func, max_attempts, label) do
+    initial_stats = %{objects: 0, requests: 0, total_attempts: 0}
 
     mappings
     |> chunk_mappings(module, :write, 0)
@@ -507,15 +560,20 @@ defmodule ModBoss do
           [_ | _] = multiple_values -> multiple_values
         end
 
+      names = Enum.map(batched_mappings, & &1.name)
+
+      write_func =
+        wrap_write_callback(write_func, module, names, address_count, max_attempts, label)
+
+      {result, attempts} = write_func.(first.type, first.starting_address, value_or_values)
+
       updated_stats = %{
         objects: stats.objects + address_count,
-        requests: stats.requests + 1
+        requests: stats.requests + 1,
+        total_attempts: stats.total_attempts + attempts
       }
 
-      names = Enum.map(batched_mappings, & &1.name)
-      write_func = instrument_write(write_func, module, names, address_count, label)
-
-      case write_func.(first.type, first.starting_address, value_or_values) do
+      case result do
         :ok -> {:cont, {:ok, updated_stats}}
         {:error, error} -> {:halt, {{:error, error}, updated_stats}}
       end
@@ -523,9 +581,9 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp instrument_write(write_func, module, names, address_count, label) do
+    defp wrap_write_callback(write_func, module, names, address_count, max_attempts, label) do
       fn type, starting_address, value_or_values ->
-        start_metadata =
+        base_metadata =
           %{
             schema: module,
             names: names,
@@ -535,16 +593,41 @@ defmodule ModBoss do
           }
           |> maybe_put_label(label)
 
-        :telemetry.span([:modboss, :write_callback], start_metadata, fn ->
-          result = write_func.(type, starting_address, value_or_values)
-          stop_measurements = %{}
-          stop_metadata = Map.put(start_metadata, :result, result)
-          {result, stop_measurements, stop_metadata}
+        retry(max_attempts, fn attempt ->
+          start_metadata = Map.put(base_metadata, :attempt, attempt)
+
+          :telemetry.span([:modboss, :write_callback], start_metadata, fn ->
+            result = write_func.(type, starting_address, value_or_values)
+            stop_measurements = %{}
+            stop_metadata = Map.put(start_metadata, :result, result)
+            {result, stop_measurements, stop_metadata}
+          end)
         end)
       end
     end
   else
-    defp instrument_write(write_func, _, _, _, _), do: write_func
+    defp wrap_write_callback(write_func, _, _, _, max_attempts, _) do
+      fn type, starting_address, value_or_values ->
+        retry(max_attempts, fn _attempt ->
+          write_func.(type, starting_address, value_or_values)
+        end)
+      end
+    end
+  end
+
+  defp retry(max_attempts, func) do
+    Enum.reduce_while(1..max_attempts, nil, fn attempt, _prev ->
+      case func.(attempt) do
+        {:error, _} = error when attempt < max_attempts -> {:cont, error}
+        result -> {:halt, {result, attempt}}
+      end
+    end)
+  end
+
+  defp validate_max_attempts!(max_attempts) do
+    unless is_integer(max_attempts) and max_attempts >= 1 do
+      raise "Invalid max_attempts: #{inspect(max_attempts)}. Must be a positive integer."
+    end
   end
 
   defp maybe_put_label(metadata, nil), do: metadata

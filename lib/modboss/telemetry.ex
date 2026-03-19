@@ -21,6 +21,9 @@ defmodule ModBoss.Telemetry do
   may contain multiple batched Modbus requests). They are **not** emitted for
   validation errors (e.g. unknown mapping names or unreadable/unwritable mappings).
 
+  For descriptions of [measurements](#module-measurement-details) and
+  [metadata](#module-metadata-details), see below.
+
   ### Read Start
       # Event
       [:modboss, :read, :start]
@@ -47,6 +50,7 @@ defmodule ModBoss.Telemetry do
         duration: integer(),
         monotonic_time: integer(),
         modbus_requests: non_neg_integer(),
+        total_attempts: pos_integer(),
         objects_requested: non_neg_integer(),
         addresses_read: non_neg_integer(),
         gap_addresses_read: non_neg_integer(),
@@ -107,6 +111,7 @@ defmodule ModBoss.Telemetry do
         duration: integer(),
         monotonic_time: integer(),
         modbus_requests: non_neg_integer(),
+        total_attempts: pos_integer(),
         objects_requested: non_neg_integer()
       }
 
@@ -143,6 +148,9 @@ defmodule ModBoss.Telemetry do
   These events wrap each individual invocation of your `read_func` or `write_func`
   callback—one contiguous address range of one object type.
 
+  For descriptions of [measurements](#module-measurement-details) and
+  [metadata](#module-metadata-details), see below.
+
   ### Read Callback Start
       # Event
       [:modboss, :read_callback, :start]
@@ -160,7 +168,8 @@ defmodule ModBoss.Telemetry do
         label: term(),
         object_type: atom(),
         starting_address: non_neg_integer(),
-        address_count: pos_integer()
+        address_count: pos_integer(),
+        attempt: pos_integer()
       }
 
   ### Read Callback Stop
@@ -183,6 +192,7 @@ defmodule ModBoss.Telemetry do
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
+        attempt: pos_integer(),
         result: term()
       }
 
@@ -204,6 +214,7 @@ defmodule ModBoss.Telemetry do
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
+        attempt: pos_integer(),
         kind: atom(),
         reason: term(),
         stacktrace: list()
@@ -226,7 +237,8 @@ defmodule ModBoss.Telemetry do
         label: term(),
         object_type: atom(),
         starting_address: non_neg_integer(),
-        address_count: pos_integer()
+        address_count: pos_integer(),
+        attempt: pos_integer()
       }
 
   ### Write Callback Stop
@@ -247,6 +259,7 @@ defmodule ModBoss.Telemetry do
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
+        attempt: pos_integer(),
         result: term()
       }
 
@@ -268,6 +281,7 @@ defmodule ModBoss.Telemetry do
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
+        attempt: pos_integer(),
         kind: atom(),
         reason: term(),
         stacktrace: list()
@@ -277,7 +291,12 @@ defmodule ModBoss.Telemetry do
 
   * `duration` — elapsed time in native time units. Convert with
     `System.convert_time_unit(duration, :native, :millisecond)`.
-  * `modbus_requests` — number of callback invocations attempted during the operation.
+  * `modbus_requests` — number of batches for the operation. Each contiguous
+    address range of one object type is one request. Note that this _does not_
+    account for retries.
+  * `total_attempts` — total number of `read_func`/`write_func` invocations,
+    including retries. Equal to `modbus_requests` when no retries were needed.
+    The difference of `total_attempts - modbus_requests` is the number of retries.
   * `objects_requested` — total Modbus objects (registers/coils) covered by
     attempted callbacks.
   * `addresses_read` — total addresses attempted on the wire, including gap
@@ -306,5 +325,6 @@ defmodule ModBoss.Telemetry do
   * `object_type` — `:holding_register`, `:input_register`, `:coil`, or `:discrete_input`.
   * `starting_address` — the starting address for the request.
   * `address_count` — number of addresses in the request.
+  * `attempt` — which attempted callback invocation this is, from 1 up to `:max_attempts`.
   """
 end
