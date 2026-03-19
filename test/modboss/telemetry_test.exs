@@ -52,7 +52,7 @@ defmodule ModBoss.TelemetryTest do
     test "emits :read start and stop spans for a successful read", %{device: device} do
       set_objects(device, %{{:holding_register, 1} => 42})
 
-      {:ok, 42} = ModBoss.read(TestSchema, read_func(device), :foo)
+      {:ok, 42} = ModBoss.read(TestSchema, :foo, read_func(device))
 
       # Per-operation start
       assert_receive {:telemetry, [:modboss, :read, :start], start_measurements, start_metadata}
@@ -78,7 +78,7 @@ defmodule ModBoss.TelemetryTest do
     test "emits :read_callback start and stop spans for each read callback", %{device: device} do
       set_objects(device, %{{:holding_register, 1} => 42})
 
-      {:ok, 42} = ModBoss.read(TestSchema, read_func(device), :foo)
+      {:ok, 42} = ModBoss.read(TestSchema, :foo, read_func(device))
 
       # Per-request start
       assert_receive {:telemetry, [:modboss, :read_callback, :start], start_measurements,
@@ -120,7 +120,7 @@ defmodule ModBoss.TelemetryTest do
       })
 
       {:ok, %{foo: 10, bar: 20, grault: 1}} =
-        ModBoss.read(TestSchema, read_func(device), [:foo, :bar, :grault])
+        ModBoss.read(TestSchema, [:foo, :bar, :grault], read_func(device))
 
       # Callback requests
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _m1, meta1}
@@ -151,7 +151,7 @@ defmodule ModBoss.TelemetryTest do
         {:holding_register, 12} => 3
       })
 
-      {:ok, [1, 2, 3]} = ModBoss.read(TestSchema, read_func(device), :qux)
+      {:ok, [1, 2, 3]} = ModBoss.read(TestSchema, :qux, read_func(device))
 
       assert_receive {:telemetry, [:modboss, :read, :stop], read_measurements, _}
       assert read_measurements.objects_requested == 3
@@ -178,7 +178,7 @@ defmodule ModBoss.TelemetryTest do
       })
 
       {:ok, %{alpha: 10, echo: 50}} =
-        ModBoss.read(GapSchema, read_func(device), [:alpha, :echo], max_gap: 10)
+        ModBoss.read(GapSchema, [:alpha, :echo], read_func(device), max_gap: 10)
 
       # Per-operation: 1 request, 2 objects requested, 5 addresses read, 3 gap addresses
       assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
@@ -209,7 +209,7 @@ defmodule ModBoss.TelemetryTest do
       })
 
       {:ok, %{alpha: 10, charlie: 30, echo: 50}} =
-        ModBoss.read(GapSchema, read_func(device), [:alpha, :charlie, :echo], max_gap: 10)
+        ModBoss.read(GapSchema, [:alpha, :charlie, :echo], read_func(device), max_gap: 10)
 
       assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
       assert measurements.modbus_requests == 1
@@ -232,7 +232,7 @@ defmodule ModBoss.TelemetryTest do
         {:holding_register, 2} => 20
       })
 
-      {:ok, %{foo: 10, bar: 20}} = ModBoss.read(TestSchema, read_func(device), [:foo, :bar])
+      {:ok, %{foo: 10, bar: 20}} = ModBoss.read(TestSchema, [:foo, :bar], read_func(device))
 
       assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
       assert measurements.gap_addresses_read == 0
@@ -243,7 +243,7 @@ defmodule ModBoss.TelemetryTest do
 
     test "includes names as a list even for singular reads", %{device: device} do
       set_objects(device, %{{:holding_register, 1} => 42})
-      {:ok, 42} = ModBoss.read(TestSchema, read_func(device), :foo)
+      {:ok, 42} = ModBoss.read(TestSchema, :foo, read_func(device))
 
       assert_receive {:telemetry, [:modboss, :read, :start], _, %{names: names}}
       assert names == [:foo]
@@ -255,7 +255,7 @@ defmodule ModBoss.TelemetryTest do
         {:holding_register, 2} => 20
       })
 
-      {:ok, %{foo: 10, bar: 20}} = ModBoss.read(TestSchema, read_func(device), [:foo, :bar])
+      {:ok, %{foo: 10, bar: 20}} = ModBoss.read(TestSchema, [:foo, :bar], read_func(device))
 
       assert_receive {:telemetry, [:modboss, :read, :start], _, %{names: names}}
       assert Enum.sort(names) == [:bar, :foo]
@@ -263,7 +263,7 @@ defmodule ModBoss.TelemetryTest do
 
     test "emits stop with error result when read_func returns an error", %{device: _device} do
       failing_read_func = fn _type, _addr, _count -> {:error, "connection refused"} end
-      {:error, "connection refused"} = ModBoss.read(TestSchema, failing_read_func, :foo)
+      {:error, "connection refused"} = ModBoss.read(TestSchema, :foo, failing_read_func)
 
       assert_receive {:telemetry, [:modboss, :read, :start], _, _}
 
@@ -326,8 +326,8 @@ defmodule ModBoss.TelemetryTest do
       {:error, "timeout"} =
         ModBoss.read(
           schema,
-          failing_on_second,
           [:alpha, :bravo, :charlie, :delta, :echo, :golf],
+          failing_on_second,
           max_gap: 5
         )
 
@@ -364,7 +364,7 @@ defmodule ModBoss.TelemetryTest do
 
       # Each callback will be attempted twice for a total of 4 attempts in the end…
       {:ok, %{foo: 10, grault: 1}} =
-        ModBoss.read(TestSchema, flaky_read, [:foo, :grault], max_attempts: 2)
+        ModBoss.read(TestSchema, [:foo, :grault], flaky_read, max_attempts: 2)
 
       # Batch 1: attempt 1 fails, attempt 2 succeeds
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, cb1_attempt1}
@@ -397,7 +397,7 @@ defmodule ModBoss.TelemetryTest do
       set_objects(device, %{{:holding_register, 1} => 42})
       raising_read = flakify(read_func(device), fn -> raise "raised!" end, flakes: 1)
 
-      {:ok, 42} = ModBoss.read(TestSchema, raising_read, :foo, max_attempts: 2)
+      {:ok, 42} = ModBoss.read(TestSchema, :foo, raising_read, max_attempts: 2)
 
       # Attempt 1: raise, callback exception span
       assert_receive {:telemetry, [:modboss, :read_callback, :exception], _, meta1}
@@ -424,7 +424,7 @@ defmodule ModBoss.TelemetryTest do
         raise "boom!"
       end
 
-      {:error, %RuntimeError{message: "boom!"}} = ModBoss.read(TestSchema, boom_func, :foo)
+      {:error, %RuntimeError{message: "boom!"}} = ModBoss.read(TestSchema, :foo, boom_func)
 
       # Callback-level: exception event with full metadata
       assert_receive {:telemetry, [:modboss, :read_callback, :start], start_measurements,
@@ -471,7 +471,7 @@ defmodule ModBoss.TelemetryTest do
     end
 
     test "does not emit events for validation errors (e.g. unknown names)", %{device: device} do
-      {:error, _} = ModBoss.read(TestSchema, read_func(device), :nonexistent)
+      {:error, _} = ModBoss.read(TestSchema, :nonexistent, read_func(device))
 
       refute_receive {:telemetry, [:modboss, :read, :start], _, _}
       refute_receive {:telemetry, [:modboss, :read_callback, :start], _, _}
@@ -482,7 +482,7 @@ defmodule ModBoss.TelemetryTest do
     } do
       set_objects(device, %{{:holding_register, 1} => 42})
 
-      {:ok, 42} = ModBoss.read(TestSchema, read_func(device), :foo, telemetry_label: :foo_label)
+      {:ok, 42} = ModBoss.read(TestSchema, :foo, read_func(device), telemetry_label: :foo_label)
 
       assert_receive {:telemetry, [:modboss, :read, :start], _, start_metadata}
       assert start_metadata.label == :foo_label
@@ -501,7 +501,7 @@ defmodule ModBoss.TelemetryTest do
       boom_func = fn _type, _addr, _count -> raise "boom!" end
 
       {:error, %RuntimeError{}} =
-        ModBoss.read(TestSchema, boom_func, :foo, telemetry_label: :my_device)
+        ModBoss.read(TestSchema, :foo, boom_func, telemetry_label: :my_device)
 
       assert_receive {:telemetry, [:modboss, :read, :stop], _, meta}
       assert meta.label == :my_device
@@ -515,7 +515,7 @@ defmodule ModBoss.TelemetryTest do
     } do
       set_objects(device, %{{:holding_register, 1} => 42})
 
-      {:ok, 42} = ModBoss.read(TestSchema, read_func(device), :foo)
+      {:ok, 42} = ModBoss.read(TestSchema, :foo, read_func(device))
 
       assert_receive {:telemetry, [:modboss, :read, :start], _, metadata}
       refute Map.has_key?(metadata, :label)
@@ -546,7 +546,7 @@ defmodule ModBoss.TelemetryTest do
     end
 
     test "emits :write start and stop spans for a successful write", %{device: device} do
-      :ok = ModBoss.write(TestSchema, write_func(device), baz: 99)
+      :ok = ModBoss.write(TestSchema, [baz: 99], write_func(device))
 
       # Per-operation start
       assert_receive {:telemetry, [:modboss, :write, :start], start_measurements, start_metadata}
@@ -567,7 +567,7 @@ defmodule ModBoss.TelemetryTest do
     end
 
     test "emits :write_callback start and stop spans for each write callback", %{device: device} do
-      :ok = ModBoss.write(TestSchema, write_func(device), baz: 99)
+      :ok = ModBoss.write(TestSchema, [baz: 99], write_func(device))
 
       # Per-request start
       assert_receive {:telemetry, [:modboss, :write_callback, :start], start_measurements,
@@ -595,7 +595,7 @@ defmodule ModBoss.TelemetryTest do
     end
 
     test "emits aggregated data for the :write event", %{device: device} do
-      :ok = ModBoss.write(TestSchema, write_func(device), baz: 1, blah: 1, grault: 1)
+      :ok = ModBoss.write(TestSchema, [baz: 1, blah: 1, grault: 1], write_func(device))
 
       # Callback requests
       assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, meta1}
@@ -623,7 +623,7 @@ defmodule ModBoss.TelemetryTest do
     end
 
     test "emits correct counts for multi-address writes", %{device: device} do
-      :ok = ModBoss.write(TestSchema, write_func(device), qux: [1, 2, 3])
+      :ok = ModBoss.write(TestSchema, [qux: [1, 2, 3]], write_func(device))
 
       assert_receive {:telemetry, [:modboss, :write, :stop], write_measurements, _}
       assert write_measurements.objects_requested == 3
@@ -640,7 +640,7 @@ defmodule ModBoss.TelemetryTest do
         {:error, "device busy"}
       end
 
-      {:error, "device busy"} = ModBoss.write(TestSchema, failing_write_func, baz: 1)
+      {:error, "device busy"} = ModBoss.write(TestSchema, [baz: 1], failing_write_func)
 
       assert_receive {:telemetry, [:modboss, :write, :start], _, _}
 
@@ -684,7 +684,7 @@ defmodule ModBoss.TelemetryTest do
       end
 
       {:error, "timeout"} =
-        ModBoss.write(schema, failing_on_second, first: 1, second: 2, third: 3)
+        ModBoss.write(schema, [first: 1, second: 2, third: 3], failing_on_second)
 
       assert_receive {:telemetry, [:modboss, :write, :stop], measurements, metadata}
       assert metadata.result == {:error, "timeout"}
@@ -698,7 +698,7 @@ defmodule ModBoss.TelemetryTest do
     test "retries emit per-attempt callback spans and total_attempts", %{device: device} do
       flaky_write = flakify(write_func(device), fn -> {:error, "flaky"} end, flakes: 1)
 
-      :ok = ModBoss.write(TestSchema, flaky_write, [baz: 99], max_attempts: 3)
+      :ok = ModBoss.write(TestSchema, [baz: 99], flaky_write, max_attempts: 3)
 
       assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, attempt1}
       assert attempt1.attempt == 1
@@ -722,7 +722,7 @@ defmodule ModBoss.TelemetryTest do
       end
 
       {:error, %RuntimeError{message: "kaboom!"}} =
-        ModBoss.write(TestSchema, kaboom_func, baz: 1)
+        ModBoss.write(TestSchema, [baz: 1], kaboom_func)
 
       # Callback-level: exception event with full metadata
       assert_receive {:telemetry, [:modboss, :write_callback, :start], start_measurements,
@@ -766,7 +766,7 @@ defmodule ModBoss.TelemetryTest do
     end
 
     test "does not emit events for validation errors (e.g. unknown names)", %{device: device} do
-      {:error, _} = ModBoss.write(TestSchema, write_func(device), nonexistent: 1)
+      {:error, _} = ModBoss.write(TestSchema, [nonexistent: 1], write_func(device))
 
       refute_receive {:telemetry, [:modboss, :write, :start], _, _}
       refute_receive {:telemetry, [:modboss, :write_callback, :start], _, _}
@@ -776,7 +776,7 @@ defmodule ModBoss.TelemetryTest do
       device: device
     } do
       :ok =
-        ModBoss.write(TestSchema, write_func(device), [baz: 99],
+        ModBoss.write(TestSchema, [baz: 99], write_func(device),
           telemetry_label: %{port: :rs485, address: 12}
         )
 
@@ -796,7 +796,7 @@ defmodule ModBoss.TelemetryTest do
     test "retries through exceptions and succeeds", %{device: device} do
       raising_write = flakify(write_func(device), fn -> raise "raised!" end, flakes: 1)
 
-      :ok = ModBoss.write(TestSchema, raising_write, [baz: 99], max_attempts: 2)
+      :ok = ModBoss.write(TestSchema, [baz: 99], raising_write, max_attempts: 2)
 
       # Attempt 1: raise, callback exception span
       assert_receive {:telemetry, [:modboss, :write_callback, :exception], _, meta1}
@@ -820,7 +820,7 @@ defmodule ModBoss.TelemetryTest do
       kaboom_func = fn _type, _addr, _values -> raise "kaboom!" end
 
       {:error, %RuntimeError{}} =
-        ModBoss.write(TestSchema, kaboom_func, [baz: 1], telemetry_label: :my_device)
+        ModBoss.write(TestSchema, [baz: 1], kaboom_func, telemetry_label: :my_device)
 
       assert_receive {:telemetry, [:modboss, :write, :stop], _, meta}
       assert meta.label == :my_device
@@ -832,7 +832,7 @@ defmodule ModBoss.TelemetryTest do
     test "does not include label key in metadata when telemetry_label is not provided", %{
       device: device
     } do
-      :ok = ModBoss.write(TestSchema, write_func(device), baz: 99)
+      :ok = ModBoss.write(TestSchema, [baz: 99], write_func(device))
 
       assert_receive {:telemetry, [:modboss, :write, :start], _, metadata}
       refute Map.has_key?(metadata, :label)

@@ -42,7 +42,7 @@ defmodule ModBoss do
   to be read, and the count of addresses to read from. It must return either `{:ok, result}`
   or `{:error, message}`.
 
-  If a single name is requested, the result will be an :ok tuple including the singule result
+  If a single name is requested, the result will be an :ok tuple including the single result
   for that named mapping. If a list of names is requested, the result will be an :ok tuple
   including a map with mapping names as keys and mapping values as results.
 
@@ -112,32 +112,32 @@ defmodule ModBoss do
       end
 
       # Read one mapping
-      ModBoss.read(SchemaModule, read_func, :foo)
+      ModBoss.read(SchemaModule, :foo, read_func)
       {:ok, 75}
 
       # Read multiple mappings
-      ModBoss.read(SchemaModule, read_func, [:foo, :bar, :baz])
+      ModBoss.read(SchemaModule, [:foo, :bar, :baz], read_func)
       {:ok, %{foo: 75, bar: "ABC", baz: true}}
 
       # Read *all* readable mappings
-      ModBoss.read(SchemaModule, read_func, :all)
+      ModBoss.read(SchemaModule, :all, read_func)
       {:ok, %{foo: 75, bar: "ABC", baz: true, qux: 1024}}
 
       # Enable reading extra registers to reduce the number of requests
-      ModBoss.read(SchemaModule, read_func, [:foo, :bar], max_gap: 10)
+      ModBoss.read(SchemaModule, [:foo, :bar], read_func, max_gap: 10)
       {:ok, %{foo: 75, bar: "ABC"}}
 
       # …or allow reading across different gap sizes per type
-      ModBoss.read(SchemaModule, read_func, [:foo, :bar], max_gap: %{holding_registers: 10})
+      ModBoss.read(SchemaModule, [:foo, :bar], read_func, max_gap: %{holding_registers: 10})
       {:ok, %{foo: 75, bar: "ABC"}}
 
       # Get "raw" Modbus values (as returned by `read_func`)
-      ModBoss.read(SchemaModule, read_func, decode: false)
-      {:ok, bar: [16706, 17152]}
+      ModBoss.read(SchemaModule, [:foo, :bar], read_func, decode: false)
+      {:ok, %{foo: [75], bar: [16706, 17152]}}
   """
-  @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
+  @spec read(module(), atom() | [atom()], read_func(), keyword()) ::
           {:ok, any()} | {:error, any()}
-  def read(module, read_func, name_or_names, opts \\ []) do
+  def read(module, name_or_names, read_func, opts \\ []) do
     {names, opts} = evaluate_read_opts(module, name_or_names, opts)
 
     with {:ok, mappings} <- get_mappings(:readable, module, names) do
@@ -461,15 +461,15 @@ defmodule ModBoss do
   ## Example
 
       write_func = fn object_type, starting_address, value_or_values ->
-        result = custom_write_logic(…)
-        {:ok, result}
+        custom_write_logic(…)
+        :ok
       end
 
-      iex> ModBoss.write(MyDevice.Schema, write_func, foo: 75, bar: "ABC")
+      iex> ModBoss.write(MyDevice.Schema, [foo: 75, bar: "ABC"], write_func)
       :ok
   """
-  @spec write(module(), write_func(), values(), keyword()) :: :ok | {:error, any()}
-  def write(module, write_func, values, opts \\ [])
+  @spec write(module(), values(), write_func(), keyword()) :: :ok | {:error, any()}
+  def write(module, values, write_func, opts \\ [])
       when is_atom(module) and is_function(write_func) do
     names = get_keys(values)
     opts = evaluate_write_opts(opts)
