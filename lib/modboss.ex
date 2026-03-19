@@ -132,8 +132,8 @@ defmodule ModBoss do
       {:ok, %{foo: 75, bar: "ABC"}}
 
       # Get "raw" Modbus values (as returned by `read_func`)
-      ModBoss.read(SchemaModule, read_func, decode: false)
-      {:ok, bar: [16706, 17152]}
+      ModBoss.read(SchemaModule, read_func, [:foo, :bar], decode: false)
+      {:ok, %{foo: [75], bar: [16706, 17152]}}
   """
   @spec read(module(), read_func(), atom() | [atom()], keyword()) ::
           {:ok, any()} | {:error, any()}
