@@ -22,7 +22,7 @@ by adding `modboss` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:modboss, "~> 0.1.0"}
+    {:modboss, "~> 0.2.0"}
   ]
 end
 ```
@@ -150,7 +150,7 @@ reads and writes. To enable telemetry, add `:telemetry` to your dependencies:
 ```elixir
 def deps do
   [
-    {:modboss, "~> 0.1.0"},
+    # …other deps
     {:telemetry, "~> 1.0"}
   ]
 end
