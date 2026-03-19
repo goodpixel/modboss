@@ -54,7 +54,7 @@ defmodule ModBossTest do
 
       # Even with a large gap tolerance, unmapped address 2 must prevent batching
       {:ok, %{foo: 11, baz: 33}} =
-        ModBoss.read(schema, read_func(device), [:foo, :baz], max_gap: 10)
+        ModBoss.read(schema, [:foo, :baz], read_func(device), max_gap: 10)
 
       assert 2 = get_read_count(device)
     end
@@ -79,7 +79,7 @@ defmodule ModBossTest do
 
       # Even with a large gap tolerance, we'll need two reads since address 2 is unreadable
       {:ok, %{foo: 11, baz: 33}} =
-        ModBoss.read(schema, read_func(device), [:foo, :baz], max_gap: 10)
+        ModBoss.read(schema, [:foo, :baz], read_func(device), max_gap: 10)
 
       assert 2 = get_read_count(device)
     end
@@ -87,20 +87,20 @@ defmodule ModBossTest do
     test "reads an individual mapping by name, returning a single result" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       encode_and_set(device, FakeSchema, foo: 123)
-      {:ok, 123} = ModBoss.read(FakeSchema, read_func(device), :foo)
+      {:ok, 123} = ModBoss.read(FakeSchema, :foo, read_func(device))
     end
 
     test "reads values for mappings that cover multiple address" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       encode_and_set(device, FakeSchema, qux: [10, 11, 12])
-      {:ok, [10, 11, 12]} = ModBoss.read(FakeSchema, read_func(device), :qux)
+      {:ok, [10, 11, 12]} = ModBoss.read(FakeSchema, :qux, read_func(device))
     end
 
     test "reads multiple (and non-contiguous) mappings by name, returning a map of requested values" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       encode_and_set(device, FakeSchema, foo: :a, bar: :b, baz: :c, qux: [:x, :y, :z])
 
-      assert {:ok, result} = ModBoss.read(FakeSchema, read_func(device), [:foo, :qux])
+      assert {:ok, result} = ModBoss.read(FakeSchema, [:foo, :qux], read_func(device))
       assert %{foo: :a, qux: [:x, :y, :z]} == result
     end
 
@@ -108,14 +108,14 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       assert {:error, "Unknown mapping(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
-               ModBoss.read(FakeSchema, read_func(device), [:foobar, :bazqux])
+               ModBoss.read(FakeSchema, [:foobar, :bazqux], read_func(device))
     end
 
     test "refuses to read unless all mappings are declared readable" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       assert {:error, "ModBoss Mapping(s) :baz in ModBossTest.FakeSchema are not readable."} =
-               ModBoss.read(FakeSchema, read_func(device), [:bar, :baz])
+               ModBoss.read(FakeSchema, [:bar, :baz], read_func(device))
     end
 
     test "batches contiguous reads for each type up to the Modbus protocol's maximum" do
@@ -164,37 +164,37 @@ defmodule ModBossTest do
       single = [:holding_1, :holding_125]
       double = [:holding_1, :holding_125, :holding_126]
 
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), single)
+      assert {:ok, %{}} = ModBoss.read(schema, single, read_func(device))
       assert 1 = get_read_count(device)
 
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double)
+      assert {:ok, %{}} = ModBoss.read(schema, double, read_func(device))
       assert 2 = get_read_count(device)
 
       single = [:input_201, :input_325]
       double = [:input_201, :input_325, :input_326]
 
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), single)
+      assert {:ok, %{}} = ModBoss.read(schema, single, read_func(device))
       assert 1 = get_read_count(device)
 
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double)
+      assert {:ok, %{}} = ModBoss.read(schema, double, read_func(device))
       assert 2 = get_read_count(device)
 
       single = [:coil_2001, :coil_4000]
       double = [:coil_2001, :coil_4000, :coil_4001]
 
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), single)
+      assert {:ok, %{}} = ModBoss.read(schema, single, read_func(device))
       assert 1 = get_read_count(device)
 
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double)
+      assert {:ok, %{}} = ModBoss.read(schema, double, read_func(device))
       assert 2 = get_read_count(device)
 
       single = [:discrete_input_5001, :discrete_input_7000]
       double = [:discrete_input_5001, :discrete_input_7000, :discrete_input_7001]
 
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), single)
+      assert {:ok, %{}} = ModBoss.read(schema, single, read_func(device))
       assert 1 = get_read_count(device)
 
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double)
+      assert {:ok, %{}} = ModBoss.read(schema, double, read_func(device))
       assert 2 = get_read_count(device)
     end
 
@@ -251,44 +251,44 @@ defmodule ModBossTest do
       holding_registers = [:holding_foo, :holding_bar, :holding_baz, :holding_qux]
 
       single_read = Enum.take(holding_registers, max_holding_register_reads)
-      assert {:ok, _} = ModBoss.read(schema, read_func(device), single_read)
+      assert {:ok, _} = ModBoss.read(schema, single_read, read_func(device))
       assert 1 = get_read_count(device)
 
       double_read = Enum.take(holding_registers, max_holding_register_reads + 1)
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double_read)
+      assert {:ok, %{}} = ModBoss.read(schema, double_read, read_func(device))
       assert 2 = get_read_count(device)
 
       # Input registers
       input_registers = [:input_foo, :input_bar, :input_baz, :input_qux]
 
       single_read = Enum.take(input_registers, max_input_register_reads)
-      assert {:ok, _} = ModBoss.read(schema, read_func(device), single_read)
+      assert {:ok, _} = ModBoss.read(schema, single_read, read_func(device))
       assert 1 = get_read_count(device)
 
       double_read = Enum.take(input_registers, max_input_register_reads + 1)
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double_read)
+      assert {:ok, %{}} = ModBoss.read(schema, double_read, read_func(device))
       assert 2 = get_read_count(device)
 
       # Coils
       coils = [:coil_foo, :coil_bar, :coil_baz, :coil_qux]
 
       single_read = Enum.take(coils, max_coil_reads)
-      assert {:ok, _} = ModBoss.read(schema, read_func(device), single_read)
+      assert {:ok, _} = ModBoss.read(schema, single_read, read_func(device))
       assert 1 = get_read_count(device)
 
       double_read = Enum.take(coils, max_coil_reads + 1)
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double_read)
+      assert {:ok, %{}} = ModBoss.read(schema, double_read, read_func(device))
       assert 2 = get_read_count(device)
 
       # Discrete Inputs
       discrete_inputs = [:discrete_foo, :discrete_bar, :discrete_baz, :discrete_qux]
 
       single_read = Enum.take(discrete_inputs, max_discrete_input_reads)
-      assert {:ok, _} = ModBoss.read(schema, read_func(device), single_read)
+      assert {:ok, _} = ModBoss.read(schema, single_read, read_func(device))
       assert 1 = get_read_count(device)
 
       double_read = Enum.take(discrete_inputs, max_discrete_input_reads + 1)
-      assert {:ok, %{}} = ModBoss.read(schema, read_func(device), double_read)
+      assert {:ok, %{}} = ModBoss.read(schema, double_read, read_func(device))
       assert 2 = get_read_count(device)
     end
 
@@ -326,7 +326,7 @@ defmodule ModBossTest do
       names = [:holding_1, :coil_1, :coil_2, :input_1, :discrete_1]
 
       {:ok, %{holding_1: [1, 2], coil_1: 101, coil_2: 102, input_1: 201, discrete_1: 301}} =
-        ModBoss.read(schema, read_func(device), names)
+        ModBoss.read(schema, names, read_func(device))
 
       assert 4 == get_read_count(device)
     end
@@ -338,7 +338,7 @@ defmodule ModBossTest do
       assert_raise RuntimeError,
                    "Attempted to read 3 values starting from address 10 but received 0 values.",
                    fn ->
-                     ModBoss.read(FakeSchema, read_func(device), [:foo, :qux])
+                     ModBoss.read(FakeSchema, [:foo, :qux], read_func(device))
                    end
     end
 
@@ -375,7 +375,7 @@ defmodule ModBossTest do
       })
 
       assert {:ok, %{yep: true, nope: false, text: "Oh wow"}} =
-               ModBoss.read(schema, read_func(device), [:yep, :nope, :text])
+               ModBoss.read(schema, [:yep, :nope, :text], read_func(device))
     end
 
     test "returns an error if decoding fails" do
@@ -406,7 +406,7 @@ defmodule ModBossTest do
       })
 
       message = "Failed to decode :nope. Not sure what to do with 33."
-      assert {:error, ^message} = ModBoss.read(schema, read_func(device), [:yep, :nope])
+      assert {:error, ^message} = ModBoss.read(schema, [:yep, :nope], read_func(device))
     end
 
     test "allows reading of 'raw' values" do
@@ -438,10 +438,10 @@ defmodule ModBossTest do
       })
 
       assert {:ok, %{yep: true, nope: false, text: "Hello"}} =
-               ModBoss.read(schema, read_func(device), [:yep, :nope, :text])
+               ModBoss.read(schema, [:yep, :nope, :text], read_func(device))
 
       assert {:ok, %{yep: 1, nope: 0, text: [18533, 27756, 28416]}} =
-               ModBoss.read(schema, read_func(device), [:yep, :nope, :text], decode: false)
+               ModBoss.read(schema, [:yep, :nope, :text], read_func(device), decode: false)
     end
 
     test "bypasses (potentially-buggy) decode logic when asked to return raw values" do
@@ -469,7 +469,7 @@ defmodule ModBossTest do
       })
 
       assert {:ok, %{yep: 1, nope: 0}} =
-               ModBoss.read(schema, read_func(device), [:yep, :nope], decode: false)
+               ModBoss.read(schema, [:yep, :nope], read_func(device), decode: false)
     end
 
     test "fetches all readable mappings if told to read `:all`" do
@@ -498,7 +498,7 @@ defmodule ModBossTest do
         {:discrete_input, 500} => 1
       })
 
-      assert {:ok, result} = ModBoss.read(schema, read_func(device), :all)
+      assert {:ok, result} = ModBoss.read(schema, :all, read_func(device))
 
       assert %{
                foo: [10, 20],
@@ -529,11 +529,11 @@ defmodule ModBossTest do
       set_objects(device, values)
 
       # Should make 2 separate requests since they're not contiguous
-      {:ok, _} = ModBoss.read(schema, read_func(device), [:group_1, :group_2])
+      {:ok, _} = ModBoss.read(schema, [:group_1, :group_2], read_func(device))
       assert 2 = get_read_count(device)
 
       # Should make 1 request if we're okay reading across the gap
-      {:ok, _} = ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 2)
+      {:ok, _} = ModBoss.read(schema, [:group_1, :group_2], read_func(device), max_gap: 2)
       assert 1 = get_read_count(device)
     end
 
@@ -563,7 +563,7 @@ defmodule ModBossTest do
       set_objects(device, values)
 
       {:ok, result} =
-        ModBoss.read(schema, read_func(device), [:first_group, :second_group, :third_group],
+        ModBoss.read(schema, [:first_group, :second_group, :third_group], read_func(device),
           max_gap: 10
         )
 
@@ -603,7 +603,7 @@ defmodule ModBossTest do
       set_objects(device, values)
 
       {:ok, result} =
-        ModBoss.read(schema, read_func(device), [:first_group, :second_group, :third_group],
+        ModBoss.read(schema, [:first_group, :second_group, :third_group], read_func(device),
           max_gap: [holding_registers: 10]
         )
 
@@ -640,7 +640,7 @@ defmodule ModBossTest do
       set_objects(device, values)
 
       {:ok, result} =
-        ModBoss.read(schema, read_func(device), [:first_group, :second_group, :third_group],
+        ModBoss.read(schema, [:first_group, :second_group, :third_group], read_func(device),
           max_gap: %{holding_registers: 10}
         )
 
@@ -695,7 +695,6 @@ defmodule ModBossTest do
       {:ok, result} =
         ModBoss.read(
           schema,
-          read_func(device),
           [
             :first_group,
             :second_group,
@@ -706,6 +705,7 @@ defmodule ModBossTest do
             :seventh_group,
             :eighth_group
           ],
+          read_func(device),
           max_gap: 2
         )
 
@@ -727,7 +727,6 @@ defmodule ModBossTest do
       {:ok, ^result} =
         ModBoss.read(
           schema,
-          read_func(device),
           [
             :first_group,
             :second_group,
@@ -738,6 +737,7 @@ defmodule ModBossTest do
             :seventh_group,
             :eighth_group
           ],
+          read_func(device),
           max_gap: 0
         )
 
@@ -768,7 +768,7 @@ defmodule ModBossTest do
 
       # max_gap as a map
       assert capture_log(fn ->
-               ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+               ModBoss.read(schema, [:first_group, :second_group], read_func(device),
                  max_gap: %{foo: 1}
                )
              end) =~ "Invalid :foo gap size specified"
@@ -777,7 +777,7 @@ defmodule ModBossTest do
 
       # max_gap as a keyword list
       assert capture_log(fn ->
-               ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+               ModBoss.read(schema, [:first_group, :second_group], read_func(device),
                  max_gap: [bar: 10]
                )
              end) =~ "Invalid :bar gap size specified"
@@ -808,7 +808,7 @@ defmodule ModBossTest do
       # max_gap as a map
       {_result, log} =
         with_log(fn ->
-          ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+          ModBoss.read(schema, [:first_group, :second_group], read_func(device),
             max_gap: %{
               holding_registers: "nope",
               input_registers: 3.14159,
@@ -828,7 +828,7 @@ defmodule ModBossTest do
       # max_gap as a keyword list
       {_result, log} =
         with_log(fn ->
-          ModBoss.read(schema, read_func(device), [:first_group, :second_group],
+          ModBoss.read(schema, [:first_group, :second_group], read_func(device),
             max_gap: [
               holding_registers: {:yikes, 1},
               input_registers: %{},
@@ -866,7 +866,7 @@ defmodule ModBossTest do
       set_objects(device, values)
 
       # Even with max_gap: 4, the gap can't be bridged because :latch is gap_safe: false
-      {:ok, result} = ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 4)
+      {:ok, result} = ModBoss.read(schema, [:group_1, :group_2], read_func(device), max_gap: 4)
 
       assert 2 = get_read_count(device)
       assert %{group_1: [0, 1], group_2: [4, 5]} = result
@@ -892,7 +892,7 @@ defmodule ModBossTest do
       set_objects(device, values)
 
       # Since `:filler` is readable, it defaults to `gap_safe: true`; this should be a single read…
-      {:ok, result} = ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 2)
+      {:ok, result} = ModBoss.read(schema, [:group_1, :group_2], read_func(device), max_gap: 2)
 
       assert 1 = get_read_count(device)
       assert %{group_1: [0, 1], group_2: [4, 5]} = result
@@ -920,7 +920,7 @@ defmodule ModBossTest do
 
       # The gap spans addresses 2-3. Address 3 is gap_safe: false, so the gap can't be bridged.
       {:ok, result} =
-        ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 4)
+        ModBoss.read(schema, [:group_1, :group_2], read_func(device), max_gap: 4)
 
       assert 2 = get_read_count(device)
       assert %{group_1: [0, 1], group_2: [4, 5]} = result
@@ -943,7 +943,7 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
       set_objects(device, %{{:holding_register, 0} => 10, {:holding_register, 1} => 20})
 
-      {:ok, result} = ModBoss.read(schema, read_func(device), [:safe, :latch])
+      {:ok, result} = ModBoss.read(schema, [:safe, :latch], read_func(device))
       assert %{safe: 10, latch: 20} = result
     end
 
@@ -967,7 +967,7 @@ defmodule ModBossTest do
       set_objects(device, values)
 
       # Write-only mapping in the gap means the gap can't be bridged as a single read
-      {:ok, result} = ModBoss.read(schema, read_func(device), [:group_1, :group_2], max_gap: 4)
+      {:ok, result} = ModBoss.read(schema, [:group_1, :group_2], read_func(device), max_gap: 4)
 
       assert 2 = get_read_count(device)
       assert %{group_1: [0, 1], group_2: [4, 5]} = result
@@ -986,7 +986,7 @@ defmodule ModBossTest do
                 gap_safe: true,
                 encoded_value: 123,
                 value: 123
-              }} = ModBoss.read(FakeSchema, read_func(device), :foo, debug: true)
+              }} = ModBoss.read(FakeSchema, :foo, read_func(device), debug: true)
     end
 
     test "debug mode returns a map of mapping details for a plural read" do
@@ -1013,7 +1013,7 @@ defmodule ModBossTest do
                   encoded_value: 22,
                   value: 22
                 }
-              }} = ModBoss.read(FakeSchema, read_func(device), [:foo, :bar], debug: true)
+              }} = ModBoss.read(FakeSchema, [:foo, :bar], read_func(device), debug: true)
     end
 
     test "debug mode with decode: false omits value and includes encoded_value" do
@@ -1039,7 +1039,7 @@ defmodule ModBossTest do
       })
 
       assert {:ok, result} =
-               ModBoss.read(schema, read_func(device), :flag, debug: true, decode: false)
+               ModBoss.read(schema, :flag, read_func(device), debug: true, decode: false)
 
       assert %{
                type: :holding_register,
@@ -1095,7 +1095,7 @@ defmodule ModBossTest do
                   encoded_value: 99,
                   value: 99
                 }
-              }} = ModBoss.read(schema, read_func(device), :all, debug: true)
+              }} = ModBoss.read(schema, :all, read_func(device), debug: true)
     end
 
     test "debug mode shows encoded register values alongside the decoded value" do
@@ -1129,7 +1129,7 @@ defmodule ModBossTest do
                 gap_safe: true,
                 encoded_value: [21587, 13104, 12336, 0],
                 value: "TS3000"
-              }} = ModBoss.read(schema, read_func(device), :model_name, debug: true)
+              }} = ModBoss.read(schema, :model_name, read_func(device), debug: true)
     end
 
     test "max_attempts retries on error and succeeds" do
@@ -1138,7 +1138,7 @@ defmodule ModBossTest do
 
       flaky_read = flakify(read_func(device), fn -> {:error, "flaky"} end, flakes: 2)
 
-      assert {:ok, 42} = ModBoss.read(FakeSchema, flaky_read, :foo, max_attempts: 3)
+      assert {:ok, 42} = ModBoss.read(FakeSchema, :foo, flaky_read, max_attempts: 3)
     end
 
     test "max_attempts returns error when all attempts exhausted" do
@@ -1147,7 +1147,7 @@ defmodule ModBossTest do
 
       flaky_read = flakify(read_func(device), fn -> {:error, "flaky"} end, flakes: 2)
 
-      assert {:error, "flaky"} = ModBoss.read(FakeSchema, flaky_read, :foo, max_attempts: 2)
+      assert {:error, "flaky"} = ModBoss.read(FakeSchema, :foo, flaky_read, max_attempts: 2)
     end
 
     test "max_attempts retries are per-callback, not per-operation" do
@@ -1176,7 +1176,7 @@ defmodule ModBossTest do
       # This is 2 batches (due to different objects types) that will each fail once
       # before succeeding. This means we'll make 2 attempts for each batch (4 total).
       assert {:ok, %{alpha: 10, bravo: 1}} =
-               ModBoss.read(schema, flaky_read, [:alpha, :bravo], max_attempts: 2)
+               ModBoss.read(schema, [:alpha, :bravo], flaky_read, max_attempts: 2)
     end
 
     test "max_attempts retries on raise and succeeds" do
@@ -1185,43 +1185,43 @@ defmodule ModBossTest do
 
       raising_read = flakify(read_func(device), fn -> raise "raised!" end, flakes: 2)
 
-      assert {:ok, 42} = ModBoss.read(FakeSchema, raising_read, :foo, max_attempts: 3)
+      assert {:ok, 42} = ModBoss.read(FakeSchema, :foo, raising_read, max_attempts: 3)
     end
 
     test "max_attempts returns error when all attempts raise" do
       boom_func = fn _type, _addr, _count -> raise "boom!" end
 
       assert {:error, %RuntimeError{message: "boom!"}} =
-               ModBoss.read(FakeSchema, boom_func, :foo, max_attempts: 2)
+               ModBoss.read(FakeSchema, :foo, boom_func, max_attempts: 2)
     end
 
     test "max_attempts raises on invalid values" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       assert_raise RuntimeError, fn ->
-        ModBoss.read(FakeSchema, read_func(device), :foo, max_attempts: 0)
+        ModBoss.read(FakeSchema, :foo, read_func(device), max_attempts: 0)
       end
 
       assert_raise RuntimeError, fn ->
-        ModBoss.read(FakeSchema, read_func(device), :foo, max_attempts: -1)
+        ModBoss.read(FakeSchema, :foo, read_func(device), max_attempts: -1)
       end
 
       assert_raise RuntimeError, fn ->
-        ModBoss.read(FakeSchema, read_func(device), :foo, max_attempts: "foo")
+        ModBoss.read(FakeSchema, :foo, read_func(device), max_attempts: "foo")
       end
     end
   end
 
-  describe "ModBoss.write/3" do
+  describe "ModBoss.write/4" do
     test "writes objects referenced by human-readable names from map" do
       device = start_supervised!({Agent, fn -> @initial_state end})
-      :ok = ModBoss.write(FakeSchema, write_func(device), %{baz: 1, corge: 1234})
+      :ok = ModBoss.write(FakeSchema, %{baz: 1, corge: 1234}, write_func(device))
       assert %{{:holding_register, 3} => 1, {:holding_register, 15} => 1234} = get_objects(device)
     end
 
     test "writes objects referenced by human-readable names from keyword" do
       device = start_supervised!({Agent, fn -> @initial_state end})
-      :ok = ModBoss.write(FakeSchema, write_func(device), baz: 1, corge: 1234)
+      :ok = ModBoss.write(FakeSchema, [baz: 1, corge: 1234], write_func(device))
       assert %{{:holding_register, 3} => 1, {:holding_register, 15} => 1234} = get_objects(device)
     end
 
@@ -1229,7 +1229,7 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       assert {:error, "Unknown mapping(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
-               ModBoss.write(FakeSchema, write_func(device), %{foobar: 1, bazqux: 2})
+               ModBoss.write(FakeSchema, %{foobar: 1, bazqux: 2}, write_func(device))
     end
 
     test "refuses to write unless all mappings are declared writable" do
@@ -1244,17 +1244,17 @@ defmodule ModBossTest do
       set_objects(device, initial_values)
 
       assert {:error, "ModBoss Mapping(s) :foo, :bar in ModBossTest.FakeSchema are not writable."} =
-               ModBoss.write(FakeSchema, write_func(device), %{foo: 1, bar: 2, baz: 3})
+               ModBoss.write(FakeSchema, %{foo: 1, bar: 2, baz: 3}, write_func(device))
 
       assert get_objects(device) == initial_values
 
-      assert :ok = ModBoss.write(FakeSchema, write_func(device), %{baz: 3})
+      assert :ok = ModBoss.write(FakeSchema, %{baz: 3}, write_func(device))
       assert get_objects(device) == Map.put(initial_values, {:holding_register, 3}, 3)
     end
 
     test "writes named mappings that span more than one address" do
       device = start_supervised!({Agent, fn -> @initial_state end})
-      :ok = ModBoss.write(FakeSchema, write_func(device), %{qux: [0, 10, 20], quux: [-1, -2]})
+      :ok = ModBoss.write(FakeSchema, %{qux: [0, 10, 20], quux: [-1, -2]}, write_func(device))
 
       assert %{
                {:holding_register, 10} => 0,
@@ -1289,7 +1289,7 @@ defmodule ModBossTest do
 
       device = start_supervised!({Agent, fn -> @initial_state end})
 
-      :ok = ModBoss.write(schema, write_func(device), %{yep: true, nope: false, text: "Oh wow"})
+      :ok = ModBoss.write(schema, %{yep: true, nope: false, text: "Oh wow"}, write_func(device))
 
       assert %{
                {:holding_register, 1} => 1,
@@ -1305,7 +1305,7 @@ defmodule ModBossTest do
 
       assert {:error,
               "Failed to encode :qux. Encoded value [100, 200] for :qux does not match the number of mapped addresses."} =
-               ModBoss.write(FakeSchema, write_func(device), %{qux: [100, 200]})
+               ModBoss.write(FakeSchema, %{qux: [100, 200]}, write_func(device))
     end
 
     test "batches contiguous writes for each object type up to the Modbus protocol's maximum" do
@@ -1332,19 +1332,19 @@ defmodule ModBossTest do
       single_batch = %{holding_1: values(122), holding_123: 1}
       double_double = %{holding_1: values(122), holding_123: 1, holding_124: 1}
 
-      assert :ok = ModBoss.write(schema, write_func(device), single_batch)
+      assert :ok = ModBoss.write(schema, single_batch, write_func(device))
       assert 1 = get_write_count(device)
 
-      assert :ok = ModBoss.write(schema, write_func(device), double_double)
+      assert :ok = ModBoss.write(schema, double_double, write_func(device))
       assert 2 = get_write_count(device)
 
       single_batch = %{coil_1001: values(1967), coil_2968: 1}
       double_batch = %{coil_1001: values(1967), coil_2968: 1, coil_2969: 1}
 
-      assert :ok = ModBoss.write(schema, write_func(device), single_batch)
+      assert :ok = ModBoss.write(schema, single_batch, write_func(device))
       assert 1 = get_write_count(device)
 
-      assert :ok = ModBoss.write(schema, write_func(device), double_batch)
+      assert :ok = ModBoss.write(schema, double_batch, write_func(device))
       assert 2 = get_write_count(device)
     end
 
@@ -1368,7 +1368,7 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       values = %{holding_1: 1, holding_2: 2, coil_1: 3, coil_2: 4}
-      :ok = ModBoss.write(schema, write_func(device), values)
+      :ok = ModBoss.write(schema, values, write_func(device))
 
       assert 2 == get_write_count(device)
 
@@ -1403,20 +1403,28 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       assert :ok =
-               ModBoss.write(schema, write_func(device), %{
-                 holding_foo: 1,
-                 holding_bar: [1, 1],
-                 holding_baz: 1
-               })
+               ModBoss.write(
+                 schema,
+                 %{
+                   holding_foo: 1,
+                   holding_bar: [1, 1],
+                   holding_baz: 1
+                 },
+                 write_func(device)
+               )
 
       assert 3 = get_write_count(device)
 
       assert :ok =
-               ModBoss.write(schema, write_func(device), %{
-                 coil_foo: 1,
-                 coil_bar: [1, 1],
-                 coil_baz: 1
-               })
+               ModBoss.write(
+                 schema,
+                 %{
+                   coil_foo: 1,
+                   coil_bar: [1, 1],
+                   coil_baz: 1
+                 },
+                 write_func(device)
+               )
 
       assert 3 = get_write_count(device)
     end
@@ -1438,7 +1446,7 @@ defmodule ModBossTest do
 
       device = start_supervised!({Agent, fn -> @initial_state end})
 
-      :ok = ModBoss.write(schema, write_func(device), %{foo: 10, bar: 50})
+      :ok = ModBoss.write(schema, %{foo: 10, bar: 50}, write_func(device))
 
       assert 2 = get_write_count(device)
       assert %{{:holding_register, 1} => 10, {:holding_register, 3} => 50} = get_objects(device)
@@ -1449,7 +1457,7 @@ defmodule ModBossTest do
 
       flaky_write = flakify(write_func(device), fn -> {:error, "flaky"} end, flakes: 2)
 
-      :ok = ModBoss.write(FakeSchema, flaky_write, [baz: 99], max_attempts: 3)
+      :ok = ModBoss.write(FakeSchema, [baz: 99], flaky_write, max_attempts: 3)
       assert %{{:holding_register, 3} => 99} = get_objects(device)
     end
 
@@ -1458,7 +1466,7 @@ defmodule ModBossTest do
 
       flaky_write = flakify(write_func(device), fn -> {:error, "flaky"} end, flakes: 2)
 
-      {:error, "flaky"} = ModBoss.write(FakeSchema, flaky_write, [baz: 99], max_attempts: 2)
+      {:error, "flaky"} = ModBoss.write(FakeSchema, [baz: 99], flaky_write, max_attempts: 2)
     end
 
     test "max_attempts retries on raise and succeeds" do
@@ -1466,7 +1474,7 @@ defmodule ModBossTest do
 
       raising_write = flakify(write_func(device), fn -> raise "raised!" end, flakes: 1)
 
-      :ok = ModBoss.write(FakeSchema, raising_write, [baz: 99], max_attempts: 2)
+      :ok = ModBoss.write(FakeSchema, [baz: 99], raising_write, max_attempts: 2)
       assert %{{:holding_register, 3} => 99} = get_objects(device)
     end
 
@@ -1474,18 +1482,18 @@ defmodule ModBossTest do
       boom_func = fn _type, _addr, _values -> raise "kaboom!" end
 
       assert {:error, %RuntimeError{message: "kaboom!"}} =
-               ModBoss.write(FakeSchema, boom_func, [baz: 99], max_attempts: 2)
+               ModBoss.write(FakeSchema, [baz: 99], boom_func, max_attempts: 2)
     end
 
     test "max_attempts raises on invalid values" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       assert_raise RuntimeError, fn ->
-        ModBoss.write(FakeSchema, write_func(device), [baz: 99], max_attempts: 0)
+        ModBoss.write(FakeSchema, [baz: 99], write_func(device), max_attempts: 0)
       end
 
       assert_raise RuntimeError, fn ->
-        ModBoss.write(FakeSchema, write_func(device), [baz: 99], max_attempts: -1)
+        ModBoss.write(FakeSchema, [baz: 99], write_func(device), max_attempts: -1)
       end
     end
   end

@@ -108,19 +108,19 @@ From here you can read and write by name…
 
 #### Requesting a single value returns just one value:
 ```elixir
-iex> ModBoss.read(MyDevice.Schema, read_func, :outdoor_temp)
+iex> ModBoss.read(MyDevice.Schema, :outdoor_temp, read_func)
 {:ok, 72}
 ```
 
 #### Requesting multiple values returns a map:
 ```elixir
-iex> ModBoss.read(MyDevice.Schema, read_func, [:outdoor_temp, :model_name, :version])
+iex> ModBoss.read(MyDevice.Schema, [:outdoor_temp, :model_name, :version], read_func)
 {:ok, %{outdoor_temp: 72, model_name: "AI4000", version: "0.1"}}
 ```
 
-#### Writing is performed via a keyword list or map:
+#### Writing is performed via map or keyword list:
 ```elixir
-iex> ModBoss.write(MyDevice.Schema, write_func, version: "0.2")
+iex> ModBoss.write(MyDevice.Schema, %{version: "0.2"}, write_func)
 :ok
 ```
 
