@@ -681,7 +681,7 @@ defmodule ModBoss do
           {:cont, {[mapping], mapping.address_count, 0, 0}}
 
         {[prior_mapping | _] = mappings, running_count, running_gap_count, largest_gap} ->
-          gap = compute_gap(prior_mapping, mapping)
+          gap = Mapping.gap(prior_mapping, mapping)
           max_gap = if mode == :write, do: 0, else: Map.fetch!(max_gaps, mapping.type)
           total_addresses = running_count + gap.size + mapping.address_count
 
@@ -709,16 +709,6 @@ defmodule ModBoss do
       |> Enum.sort_by(& &1.starting_address)
       |> Enum.chunk_while(initial_acc, chunk_fun, after_fun)
     end)
-  end
-
-  defp compute_gap(%{type: type} = prior, %{type: type} = current) do
-    gap_start = prior.starting_address + prior.address_count
-    gap_end = current.starting_address - 1
-
-    %{
-      size: current.starting_address - gap_start,
-      addresses: MapSet.new(gap_start..gap_end//1, &{current.type, &1})
-    }
   end
 
   defp allow_gap?(gap, mode, max_gap, gap_safe_addresses) when mode in [:read, :write] do

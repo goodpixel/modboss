@@ -125,6 +125,33 @@ defmodule ModBoss.Mapping do
     raise "Invalid ModBoss option #{inspect([{field, value}])} for #{inspect(mapping.name)}."
   end
 
+  @doc """
+  Guard that checks whether two mappings are of the same type and occupy adjacent addresses.
+  """
+  defguard adjacent?(a, b)
+           when is_struct(a, __MODULE__) and is_struct(b, __MODULE__) and
+                  a.type == b.type and
+                  a.starting_address + a.address_count == b.starting_address
+
+  @doc """
+  Returns a map describing the gap between two mappings of the same type.
+
+  Returns `%{size: integer(), addresses: MapSet.t()}` where `addresses` contains
+  `{type, address}` pairs for each address in the gap.
+  """
+  def gap(%__MODULE__{} = a, %__MODULE__{} = b) when adjacent?(a, b) do
+    %{size: 0, addresses: MapSet.new()}
+  end
+
+  def gap(%__MODULE__{type: type} = a, %__MODULE__{type: type} = b) do
+    gap_start = a.starting_address + a.address_count
+
+    %{
+      size: b.starting_address - gap_start,
+      addresses: MapSet.new(gap_start..(b.starting_address - 1)//1, &{type, &1})
+    }
+  end
+
   @read_modes [:r, :rw]
   @doc false
   def readable?(%__MODULE__{} = mapping), do: mapping.mode in @read_modes

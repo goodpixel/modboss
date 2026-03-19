@@ -1,6 +1,7 @@
 defmodule ModBoss.MappingTest do
   use ExUnit.Case, async: true
   alias ModBoss.Mapping
+  require Mapping
 
   describe "new/4" do
     test "creates a valid mapping with default options" do
@@ -89,6 +90,78 @@ defmodule ModBoss.MappingTest do
 
     mapping = Mapping.new(__MODULE__, :foo, :holding_register, 27..31)
     assert 27..31 = Mapping.address_range(mapping)
+  end
+
+  describe "adjacent?/2" do
+    test "true when same type and addresses are contiguous" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 1)
+      b = Mapping.new(__MODULE__, :b, :holding_register, 2)
+      assert Mapping.adjacent?(a, b)
+    end
+
+    test "true when mappings of the same type span multiple contiguous addresses" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 1..3)
+      b = Mapping.new(__MODULE__, :b, :holding_register, 4..5)
+      assert Mapping.adjacent?(a, b)
+    end
+
+    test "false when there is a gap between addresses" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 1)
+      b = Mapping.new(__MODULE__, :b, :holding_register, 3)
+      refute Mapping.adjacent?(a, b)
+    end
+
+    test "false when types differ" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 1)
+      b = Mapping.new(__MODULE__, :b, :input_register, 2)
+      refute Mapping.adjacent?(a, b)
+    end
+
+    test "false when order is reversed" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 2)
+      b = Mapping.new(__MODULE__, :b, :holding_register, 1)
+      refute Mapping.adjacent?(a, b)
+    end
+  end
+
+  describe "gap/2" do
+    test "returns size 0 and empty addresses for adjacent mappings" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 1)
+      b = Mapping.new(__MODULE__, :b, :holding_register, 2)
+      assert %{size: 0, addresses: addresses} = Mapping.gap(a, b)
+      assert MapSet.size(addresses) == 0
+    end
+
+    test "returns the correct size and addresses for a gap" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 1)
+      b = Mapping.new(__MODULE__, :b, :holding_register, 5)
+      assert %{size: 3, addresses: addresses} = Mapping.gap(a, b)
+
+      assert addresses ==
+               MapSet.new([
+                 {:holding_register, 2},
+                 {:holding_register, 3},
+                 {:holding_register, 4}
+               ])
+    end
+
+    test "raises when types differ" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 1)
+      b = Mapping.new(__MODULE__, :b, :input_register, 2)
+
+      assert_raise FunctionClauseError, fn ->
+        Mapping.gap(a, b)
+      end
+    end
+
+    test "works with multi-address mappings" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 1..3)
+      b = Mapping.new(__MODULE__, :b, :holding_register, 6)
+      assert %{size: 2, addresses: addresses} = Mapping.gap(a, b)
+
+      assert addresses ==
+               MapSet.new([{:holding_register, 4}, {:holding_register, 5}])
+    end
   end
 
   describe "readable?/1" do
