@@ -238,6 +238,7 @@ defmodule ModBoss.Schema do
     end
   end
 
+  @doc false
   def validate_name!(%Macro.Env{file: file, line: line}, :all) do
     raise CompileError,
       file: file,
@@ -247,6 +248,7 @@ defmodule ModBoss.Schema do
 
   def validate_name!(_env, _name), do: :ok
 
+  @doc false
   def create_mapping(module, object_type, address_or_range, name, opts) do
     if not Module.has_attribute?(module, :modboss_mappings) do
       raise """
