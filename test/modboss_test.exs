@@ -1151,20 +1151,19 @@ defmodule ModBossTest do
                ModBoss.read(schema, [:alpha, :bravo], flaky_read, max_attempts: 2)
     end
 
-    test "max_attempts retries on raise and succeeds" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
-      encode_and_set(device, FakeSchema, foo: 42)
+    test "max_attempts does not retry on raise" do
+      call_count = start_supervised!({Agent, fn -> 0 end})
 
-      raising_read = flakify(read_func(device), fn -> raise "raised!" end, flakes: 2)
+      boom_func = fn _type, _addr, _count ->
+        Agent.update(call_count, &(&1 + 1))
+        raise "boom!"
+      end
 
-      assert {:ok, 42} = ModBoss.read(FakeSchema, :foo, raising_read, max_attempts: 3)
-    end
+      assert_raise RuntimeError, "boom!", fn ->
+        ModBoss.read(FakeSchema, :foo, boom_func, max_attempts: 3)
+      end
 
-    test "max_attempts returns error when all attempts raise" do
-      boom_func = fn _type, _addr, _count -> raise "boom!" end
-
-      assert {:error, %RuntimeError{message: "boom!"}} =
-               ModBoss.read(FakeSchema, :foo, boom_func, max_attempts: 2)
+      assert Agent.get(call_count, & &1) == 1
     end
 
     test "max_attempts raises on invalid values" do
@@ -1441,20 +1440,19 @@ defmodule ModBossTest do
       {:error, "flaky"} = ModBoss.write(FakeSchema, [baz: 99], flaky_write, max_attempts: 2)
     end
 
-    test "max_attempts retries on raise and succeeds" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
+    test "max_attempts does not retry on raise" do
+      call_count = start_supervised!({Agent, fn -> 0 end})
 
-      raising_write = flakify(write_func(device), fn -> raise "raised!" end, flakes: 1)
+      kaboom_func = fn _type, _addr, _values ->
+        Agent.update(call_count, &(&1 + 1))
+        raise "kaboom!"
+      end
 
-      :ok = ModBoss.write(FakeSchema, [baz: 99], raising_write, max_attempts: 2)
-      assert %{{:holding_register, 3} => 99} = get_objects(device)
-    end
+      assert_raise RuntimeError, "kaboom!", fn ->
+        ModBoss.write(FakeSchema, [baz: 99], kaboom_func, max_attempts: 3)
+      end
 
-    test "max_attempts returns error when all attempts raise" do
-      boom_func = fn _type, _addr, _values -> raise "kaboom!" end
-
-      assert {:error, %RuntimeError{message: "kaboom!"}} =
-               ModBoss.write(FakeSchema, [baz: 99], boom_func, max_attempts: 2)
+      assert Agent.get(call_count, & &1) == 1
     end
 
     test "max_attempts raises on invalid values" do

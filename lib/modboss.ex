@@ -61,18 +61,11 @@ defmodule ModBoss do
       defaults to `true`. This option can be especially useful if you need insight
       into a particular value that is failing to decode as expected.
     * `:max_attempts` — maximum number of times each `read_func` callback will
-      be attempted before giving up. Defaults to `1` (no retries). Callbacks that
-      raise an exception or return an error tuple will trigger a retry.
+      be attempted before giving up. Defaults to `1` (no retries). Only
+      `{:error, _}` triggers a retry; exceptions are not retried.
     * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
       event metadata. Useful for identifying which device or connection a
       request belongs to. See `ModBoss.Telemetry` for details.
-
-  > #### Callback exceptions are rescued {: .warning}
-  >
-  > If `read_func` raises an exception, ModBoss rescues it and returns
-  > `{:error, exception}`. This applies regardless of the `:max_attempts`
-  > setting. The exception and stacktrace will be available via
-  > [per-callback telemetry events](`ModBoss.Telemetry`).
 
   > #### Gaps {: .info}
   >
@@ -433,13 +426,6 @@ defmodule ModBoss do
   > Each batch will contain **either a list or an individual value** based on the number of
   > addresses to be written—so you should be prepared for both.
 
-  > #### Callback exceptions are rescued {: .warning}
-  >
-  > If `write_func` raises an exception, ModBoss rescues it and returns
-  > `{:error, exception}`. This applies regardless of the `:max_attempts`
-  > setting. The exception and stacktrace will be available via
-  > [per-callback telemetry events](`ModBoss.Telemetry`).
-
   > #### Non-atomic writes! {: .warning}
   >
   > While `ModBoss.write/4` has the _feel_ of being atomic, it's important to recognize that it
@@ -451,8 +437,8 @@ defmodule ModBoss do
 
   ## Opts
     * `:max_attempts` — maximum number of times each `write_func` callback will
-      be attempted before giving up. Defaults to `1` (no retries). Callbacks that
-      raise an exception or return an error tuple will trigger a retry.
+      be attempted before giving up. Defaults to `1` (no retries). Only
+      `{:error, _}` triggers a retry; exceptions are not retried.
     * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
       event metadata. Useful for identifying which device or connection a
       request belongs to. See `ModBoss.Telemetry` for details.
@@ -630,14 +616,7 @@ defmodule ModBoss do
 
   defp retry(max_attempts, func) do
     Enum.reduce_while(1..max_attempts, nil, fn attempt, _prev ->
-      result =
-        try do
-          func.(attempt)
-        rescue
-          e -> {:error, e}
-        end
-
-      case result do
+      case func.(attempt) do
         {:error, _} = error when attempt < max_attempts -> {:cont, error}
         result -> {:halt, {result, attempt}}
       end
