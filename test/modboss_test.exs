@@ -1,6 +1,5 @@
 defmodule ModBossTest do
   use ExUnit.Case, async: true
-  import ExUnit.CaptureLog
   import ModBoss.CallbackHelpers
 
   defmodule FakeSchema do
@@ -604,7 +603,7 @@ defmodule ModBossTest do
 
       {:ok, result} =
         ModBoss.read(schema, [:first_group, :second_group, :third_group], read_func(device),
-          max_gap: [holding_registers: 10]
+          max_gap: [holding_register: 10]
         )
 
       assert 2 = get_read_count(device)
@@ -641,7 +640,7 @@ defmodule ModBossTest do
 
       {:ok, result} =
         ModBoss.read(schema, [:first_group, :second_group, :third_group], read_func(device),
-          max_gap: %{holding_registers: 10}
+          max_gap: %{holding_register: 10}
         )
 
       assert 2 = get_read_count(device)
@@ -744,48 +743,7 @@ defmodule ModBossTest do
       assert 8 = get_read_count(device)
     end
 
-    test "logs a warning (but doesn't fail) if unsupported keys are used with `max_gap`" do
-      schema = unique_module()
-
-      Code.compile_string("""
-      defmodule #{schema} do
-        use ModBoss.Schema
-
-        schema do
-          holding_register 0..5, :first_group
-          holding_register 6..15, :filler_a
-          holding_register 16..23, :second_group
-          holding_register 24..34, :filler_b
-          holding_register 35..37, :third_group
-        end
-      end
-      """)
-
-      device = start_supervised!({Agent, fn -> @initial_state end})
-      values = Enum.into(0..37, %{}, fn i -> {{:holding_register, i}, i} end)
-
-      set_objects(device, values)
-
-      # max_gap as a map
-      assert capture_log(fn ->
-               ModBoss.read(schema, [:first_group, :second_group], read_func(device),
-                 max_gap: %{foo: 1}
-               )
-             end) =~ "Invalid :foo gap size specified"
-
-      assert 2 = get_read_count(device)
-
-      # max_gap as a keyword list
-      assert capture_log(fn ->
-               ModBoss.read(schema, [:first_group, :second_group], read_func(device),
-                 max_gap: [bar: 10]
-               )
-             end) =~ "Invalid :bar gap size specified"
-
-      assert 2 = get_read_count(device)
-    end
-
-    test "logs a warning (but doesn't fail) when values for `:max_gap` are not positive integers" do
+    test "raises when values for `:max_gap` are not positive integers" do
       schema = unique_module()
 
       Code.compile_string("""
@@ -805,45 +763,30 @@ defmodule ModBossTest do
 
       set_objects(device, values)
 
+      invalid_gaps = [
+        holding_register: "nope",
+        input_register: 3.14159,
+        coil: -1,
+        discrete_input: nil
+      ]
+
       # max_gap as a map
-      {_result, log} =
-        with_log(fn ->
+      for {key, value} <- invalid_gaps do
+        assert_raise RuntimeError, ~r"Invalid max_gap size", fn ->
           ModBoss.read(schema, [:first_group, :second_group], read_func(device),
-            max_gap: %{
-              holding_registers: "nope",
-              input_registers: 3.14159,
-              coils: -1,
-              discrete_inputs: nil
-            }
+            max_gap: %{key => value}
           )
-        end)
-
-      assert log =~ ~S[Invalid max gap size "nope"]
-      assert log =~ ~S[Invalid max gap size 3.14159]
-      assert log =~ ~S[Invalid max gap size -1]
-      assert log =~ ~S[Invalid max gap size nil]
-
-      assert 2 = get_read_count(device)
+        end
+      end
 
       # max_gap as a keyword list
-      {_result, log} =
-        with_log(fn ->
+      for {key, value} <- invalid_gaps do
+        assert_raise RuntimeError, ~r"Invalid max_gap size", fn ->
           ModBoss.read(schema, [:first_group, :second_group], read_func(device),
-            max_gap: [
-              holding_registers: {:yikes, 1},
-              input_registers: %{},
-              coils: :blurgh,
-              discrete_inputs: [:thing]
-            ]
+            max_gap: [{key, value}]
           )
-        end)
-
-      assert log =~ ~S[Invalid max gap size {:yikes, 1}]
-      assert log =~ ~S[Invalid max gap size %{}]
-      assert log =~ ~S[Invalid max gap size :blurgh]
-      assert log =~ ~S{Invalid max gap size [:thing]}
-
-      assert 2 = get_read_count(device)
+        end
+      end
     end
 
     test "`gap_safe: false` prevents a mapping's addresses from being included in a gap read" do
@@ -924,6 +867,35 @@ defmodule ModBossTest do
 
       assert 2 = get_read_count(device)
       assert %{group_1: [0, 1], group_2: [4, 5]} = result
+    end
+
+    test "gap that would exceed max_batch_reads forces a new chunk" do
+      schema = unique_module()
+
+      # max_batch_reads: 6 means we can read at most 6 addresses in one request.
+      # group_1 (2 addrs) + gap (3 addrs) + group_2 (2 addrs) = 7, which exceeds 6.
+      # So they must be split into two reads, even though the gap is allowed.
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema, max_batch_reads: [holding_registers: 6]
+
+        schema do
+          holding_register 0..1, :group_1
+          holding_register 2..4, :filler
+          holding_register 5..6, :group_2
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      values = Enum.into(0..6, %{}, fn i -> {{:holding_register, i}, i} end)
+      set_objects(device, values)
+
+      {:ok, result} =
+        ModBoss.read(schema, [:group_1, :group_2], read_func(device), max_gap: 5)
+
+      assert 2 = get_read_count(device)
+      assert %{group_1: [0, 1], group_2: [5, 6]} = result
     end
 
     test "`gap_safe: false` mappings can still be read when explicitly requested" do

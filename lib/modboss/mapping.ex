@@ -128,7 +128,7 @@ defmodule ModBoss.Mapping do
   @doc """
   Guard that checks whether two mappings are of the same type and occupy adjacent addresses.
   """
-  defguard adjacent?(a, b)
+  defguard is_adjacent(a, b)
            when is_struct(a, __MODULE__) and is_struct(b, __MODULE__) and
                   a.type == b.type and
                   a.starting_address + a.address_count == b.starting_address
@@ -139,11 +139,12 @@ defmodule ModBoss.Mapping do
   Returns `%{size: integer(), addresses: MapSet.t()}` where `addresses` contains
   `{type, address}` pairs for each address in the gap.
   """
-  def gap(%__MODULE__{} = a, %__MODULE__{} = b) when adjacent?(a, b) do
+  def gap(%__MODULE__{} = a, %__MODULE__{} = b) when is_adjacent(a, b) do
     %{size: 0, addresses: MapSet.new()}
   end
 
-  def gap(%__MODULE__{type: type} = a, %__MODULE__{type: type} = b) do
+  def gap(%__MODULE__{type: type} = a, %__MODULE__{type: type} = b)
+      when a.starting_address < b.starting_address do
     gap_start = a.starting_address + a.address_count
 
     %{

@@ -92,35 +92,35 @@ defmodule ModBoss.MappingTest do
     assert 27..31 = Mapping.address_range(mapping)
   end
 
-  describe "adjacent?/2" do
+  describe "is_adjacent/2" do
     test "true when same type and addresses are contiguous" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 1)
       b = Mapping.new(__MODULE__, :b, :holding_register, 2)
-      assert Mapping.adjacent?(a, b)
+      assert Mapping.is_adjacent(a, b)
     end
 
     test "true when mappings of the same type span multiple contiguous addresses" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 1..3)
       b = Mapping.new(__MODULE__, :b, :holding_register, 4..5)
-      assert Mapping.adjacent?(a, b)
+      assert Mapping.is_adjacent(a, b)
     end
 
     test "false when there is a gap between addresses" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 1)
       b = Mapping.new(__MODULE__, :b, :holding_register, 3)
-      refute Mapping.adjacent?(a, b)
+      refute Mapping.is_adjacent(a, b)
     end
 
     test "false when types differ" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 1)
       b = Mapping.new(__MODULE__, :b, :input_register, 2)
-      refute Mapping.adjacent?(a, b)
+      refute Mapping.is_adjacent(a, b)
     end
 
     test "false when order is reversed" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 2)
       b = Mapping.new(__MODULE__, :b, :holding_register, 1)
-      refute Mapping.adjacent?(a, b)
+      refute Mapping.is_adjacent(a, b)
     end
   end
 

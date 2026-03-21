@@ -13,6 +13,7 @@ defmodule ModBoss do
 
   require Logger
   alias ModBoss.Mapping
+  import Mapping, only: [is_adjacent: 2]
 
   @typep mode :: :readable | :writable | :any
 
@@ -28,7 +29,7 @@ defmodule ModBoss do
 
   @type values :: [{atom(), any()}] | %{atom() => any()}
 
-  @object_types [:holding_registers, :input_registers, :coils, :discrete_inputs]
+  @object_types [:holding_register, :input_register, :coil, :discrete_input]
 
   @doc """
   Read from modbus using named mappings.
@@ -128,7 +129,7 @@ defmodule ModBoss do
       {:ok, %{foo: 75, bar: "ABC"}}
 
       # …or allow reading across different gap sizes per type
-      ModBoss.read(SchemaModule, [:foo, :bar], read_func, max_gap: %{holding_registers: 10})
+      ModBoss.read(SchemaModule, [:foo, :bar], read_func, max_gap: %{holding_register: 10})
       {:ok, %{foo: 75, bar: "ABC"}}
 
       # Get "raw" Modbus values (as returned by `read_func`)
@@ -141,9 +142,17 @@ defmodule ModBoss do
     {names, opts} = evaluate_read_opts(module, name_or_names, opts)
 
     with {:ok, mappings} <- get_mappings(:readable, module, names) do
-      do_reads(module, mappings, read_func, opts, names)
+      do_reads(module, names, mappings, read_func, opts)
     end
   end
+
+  @default_read_opts %{
+    max_gap: 0,
+    max_attempts: 1,
+    decode: true,
+    debug: false,
+    telemetry_label: nil
+  }
 
   defp evaluate_read_opts(module, name_or_names, opts) do
     {names, plurality} =
@@ -153,15 +162,21 @@ defmodule ModBoss do
         names when is_list(names) -> {names, :plural}
       end
 
-    opts =
-      case Keyword.split(opts, [:max_gap, :max_attempts, :debug, :decode, :telemetry_label]) do
-        {opts, []} -> Keyword.put(opts, :plurality, plurality)
-        {_opts, unsupported_opts} -> raise "Unrecognized opts: #{inspect(unsupported_opts)}"
-      end
+    {supported_opts, unsupported_opts} =
+      Keyword.split(opts, [:max_gap, :max_attempts, :debug, :decode, :telemetry_label])
 
-    validate_max_attempts!(Keyword.get(opts, :max_attempts, 1))
+    if unsupported_opts != [] do
+      raise "Unrecognized opts: #{inspect(unsupported_opts)}"
+    end
 
-    {names, opts}
+    validated_opts =
+      supported_opts
+      |> Enum.into(@default_read_opts)
+      |> Map.put(:plurality, plurality)
+      |> Map.put(:max_gap, normalize_max_gap(supported_opts[:max_gap]))
+      |> validate!(:max_attempts)
+
+    {names, validated_opts}
   end
 
   defp readable_mappings(module) do
@@ -171,12 +186,11 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp do_reads(module, mappings, read_func, opts, names) do
-      label = Keyword.get(opts, :telemetry_label)
-      start_metadata = %{schema: module, names: names} |> maybe_put_label(label)
+    defp do_reads(module, names, mappings, read_func, opts) do
+      start_metadata = %{schema: module, names: names} |> maybe_put_label(opts.telemetry_label)
 
       :telemetry.span([:modboss, :read], start_metadata, fn ->
-        {result, stats} = read_mappings(module, mappings, read_func, opts, label)
+        {result, stats} = read_mappings(module, mappings, read_func, opts)
 
         stop_measurements = %{
           objects_requested: stats.objects,
@@ -195,36 +209,29 @@ defmodule ModBoss do
     defp maybe_put_label(metadata, nil), do: metadata
     defp maybe_put_label(metadata, label), do: Map.put(metadata, :label, label)
   else
-    defp do_reads(module, mappings, read_func, opts, _names) do
-      {result, _} = read_mappings(module, mappings, read_func, opts, _label = nil)
+    defp do_reads(module, _names, mappings, read_func, opts) do
+      {result, _} = read_mappings(module, mappings, read_func, opts)
       result
     end
   end
 
-  defp read_mappings(module, mappings, read_func, opts, label) do
-    max_gaps = Keyword.get(opts, :max_gap, %{})
-    max_attempts = Keyword.get(opts, :max_attempts, 1)
-    debug = Keyword.get(opts, :debug, false)
-    decode = Keyword.get(opts, :decode, true)
-    plurality = Keyword.fetch!(opts, :plurality)
-    field_to_return = if decode, do: :value, else: :encoded_value
-
+  defp read_mappings(module, mappings, read_func, opts) do
     {read_result, stats} =
       mappings
-      |> chunk_mappings(module, :read, max_gaps)
-      |> read_chunks(module, read_func, max_attempts, label)
+      |> chunk_mappings(module, :read, opts)
+      |> read_chunks(module, read_func, opts)
 
     with {:ok, values} <- read_result,
          {:ok, mappings} <- hydrate_values(mappings, values),
-         {:ok, mappings} <- maybe_decode(mappings, decode) do
-      result = collect_results(mappings, plurality, field_to_return, debug)
+         {:ok, mappings} <- maybe_decode(mappings, opts) do
+      result = collect_results(mappings, opts)
       {result, stats}
     else
       {:error, _error} = result -> {result, stats}
     end
   end
 
-  defp read_chunks(chunks, module, read_func, max_attempts, label) do
+  defp read_chunks(chunks, module, read_func, opts) do
     initial_stats = %{
       objects: 0,
       requests: 0,
@@ -249,7 +256,7 @@ defmodule ModBoss do
 
       {result, callback_attempts} =
         read_func
-        |> wrap_read_callback(module, names, gap_addresses, largest_gap, max_attempts, label)
+        |> wrap_read_callback(module, names, gap_addresses, largest_gap, opts)
         |> read_batch(first.type, starting_address, address_count)
 
       updated_stats = %{
@@ -269,15 +276,9 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp wrap_read_callback(
-           read_func,
-           module,
-           names,
-           gap_addresses,
-           largest_gap,
-           max_attempts,
-           label
-         ) do
+    defp wrap_read_callback(read_func, module, names, gap_addresses, largest_gap, opts) do
+      max_attempts = opts.max_attempts
+
       fn type, starting_address, address_count ->
         metadata =
           %{
@@ -287,7 +288,7 @@ defmodule ModBoss do
             starting_address: starting_address,
             address_count: address_count
           }
-          |> maybe_put_label(label)
+          |> maybe_put_label(opts.telemetry_label)
 
         retry(max_attempts, fn attempt ->
           start_metadata = Map.merge(metadata, %{attempt: attempt, max_attempts: max_attempts})
@@ -303,9 +304,9 @@ defmodule ModBoss do
       end
     end
   else
-    defp wrap_read_callback(read_func, _, _, _, _, max_attempts, _) do
+    defp wrap_read_callback(read_func, _, _, _, _, opts) do
       fn type, starting_address, address_count ->
-        retry(max_attempts, fn _attempt ->
+        retry(opts.max_attempts, fn _attempt ->
           read_func.(type, starting_address, address_count)
         end)
       end
@@ -351,7 +352,9 @@ defmodule ModBoss do
     |> then(&{:ok, &1})
   end
 
-  defp collect_results(mappings, plurality, field_to_return, _debug = true) do
+  defp collect_results(mappings, %{debug: true} = opts) do
+    field_to_return = if opts.decode, do: :value, else: :encoded_value
+
     mappings
     |> Enum.map(fn %Mapping{} = mapping ->
       debug_map =
@@ -362,13 +365,15 @@ defmodule ModBoss do
 
       {mapping.name, debug_map}
     end)
-    |> handle_plurality(plurality)
+    |> handle_plurality(opts.plurality)
   end
 
-  defp collect_results(mappings, plurality, field_to_return, _debug = false) do
+  defp collect_results(mappings, %{debug: false} = opts) do
+    field_to_return = if opts.decode, do: :value, else: :encoded_value
+
     mappings
     |> Enum.map(&{&1.name, Map.fetch!(&1, field_to_return)})
-    |> handle_plurality(plurality)
+    |> handle_plurality(opts.plurality)
   end
 
   # If we're not decoding, don't include the `:value` field in the debug output
@@ -471,24 +476,25 @@ defmodule ModBoss do
     with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values),
          {:ok, mappings} <- encode(mappings) do
-      do_writes(module, mappings, write_func, names, opts)
+      do_writes(module, names, mappings, write_func, opts)
     end
   end
 
   defp get_keys(params) when is_map(params), do: Map.keys(params)
   defp get_keys(params) when is_list(params), do: Keyword.keys(params)
 
+  @default_write_opts %{max_attempts: 1, telemetry_label: nil}
+
   defp evaluate_write_opts(opts) do
-    {label, remaining_opts} = Keyword.pop(opts, :telemetry_label)
-    {max_attempts, remaining_opts} = Keyword.pop(remaining_opts, :max_attempts, 1)
+    {opts, remaining_opts} = Keyword.split(opts, [:max_attempts, :telemetry_label])
 
     if remaining_opts != [] do
       raise "Unrecognized opts: #{inspect(remaining_opts)}"
     end
 
-    validate_max_attempts!(max_attempts)
-
-    [telemetry_label: label, max_attempts: max_attempts]
+    opts
+    |> Enum.into(@default_write_opts)
+    |> validate!(:max_attempts)
   end
 
   defp put_values(mappings, params) do
@@ -528,13 +534,11 @@ defmodule ModBoss do
   defp unwritable(mappings), do: Enum.reject(mappings, &Mapping.writable?/1)
 
   if Code.ensure_loaded?(:telemetry) do
-    defp do_writes(module, mappings, write_func, names, opts) do
-      max_attempts = Keyword.get(opts, :max_attempts, 1)
-      label = Keyword.get(opts, :telemetry_label)
-      start_metadata = %{schema: module, names: names} |> maybe_put_label(label)
+    defp do_writes(module, names, mappings, write_func, opts) do
+      start_metadata = %{schema: module, names: names} |> maybe_put_label(opts.telemetry_label)
 
       :telemetry.span([:modboss, :write], start_metadata, fn ->
-        {result, stats} = write_mappings(module, mappings, write_func, max_attempts, label)
+        {result, stats} = write_mappings(module, mappings, write_func, opts)
 
         stop_measurements = %{
           objects_requested: stats.objects,
@@ -547,18 +551,17 @@ defmodule ModBoss do
       end)
     end
   else
-    defp do_writes(module, mappings, write_func, _names, opts) do
-      max_attempts = Keyword.get(opts, :max_attempts, 1)
-      {result, _} = write_mappings(module, mappings, write_func, max_attempts, _label = nil)
+    defp do_writes(module, _names, mappings, write_func, opts) do
+      {result, _} = write_mappings(module, mappings, write_func, opts)
       result
     end
   end
 
-  defp write_mappings(module, mappings, write_func, max_attempts, label) do
+  defp write_mappings(module, mappings, write_func, opts) do
     initial_stats = %{objects: 0, requests: 0, total_attempts: 0}
 
     mappings
-    |> chunk_mappings(module, :write, 0)
+    |> chunk_mappings(module, :write, opts)
     |> Enum.reduce_while({:ok, initial_stats}, fn chunk, {:ok, stats} ->
       {batched_mappings, _gap_addresses = 0, _largest_gap = 0} = chunk
       [first | _rest] = batched_mappings
@@ -572,10 +575,7 @@ defmodule ModBoss do
         end
 
       names = Enum.map(batched_mappings, & &1.name)
-
-      wrapped_write =
-        wrap_write_callback(write_func, module, names, address_count, max_attempts, label)
-
+      wrapped_write = wrap_write_callback(write_func, module, names, address_count, opts)
       {result, attempts} = wrapped_write.(first.type, first.starting_address, value_or_values)
 
       updated_stats = %{
@@ -592,7 +592,9 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp wrap_write_callback(write_func, module, names, address_count, max_attempts, label) do
+    defp wrap_write_callback(write_func, module, names, address_count, opts) do
+      max_attempts = opts.max_attempts
+
       fn type, starting_address, value_or_values ->
         metadata =
           %{
@@ -602,7 +604,7 @@ defmodule ModBoss do
             starting_address: starting_address,
             address_count: address_count
           }
-          |> maybe_put_label(label)
+          |> maybe_put_label(opts.telemetry_label)
 
         retry(max_attempts, fn attempt ->
           start_metadata = Map.merge(metadata, %{attempt: attempt, max_attempts: max_attempts})
@@ -617,9 +619,9 @@ defmodule ModBoss do
       end
     end
   else
-    defp wrap_write_callback(write_func, _, _, _, max_attempts, _) do
+    defp wrap_write_callback(write_func, _, _, _, opts) do
       fn type, starting_address, value_or_values ->
-        retry(max_attempts, fn _attempt ->
+        retry(opts.max_attempts, fn _attempt ->
           write_func.(type, starting_address, value_or_values)
         end)
       end
@@ -642,32 +644,20 @@ defmodule ModBoss do
     end)
   end
 
-  defp validate_max_attempts!(max_attempts) do
-    unless is_integer(max_attempts) and max_attempts >= 1 do
-      raise "Invalid max_attempts: #{inspect(max_attempts)}. Must be a positive integer."
-    end
-  end
+  defp validate!(%{max_attempts: a} = opts, :max_attempts) when is_integer(a) and a >= 1, do: opts
+  defp validate!(opts, opt), do: raise("Invalid option #{inspect([{opt, opts[opt]}])}.")
 
-  @spec chunk_mappings([Mapping.t()], module(), :read | :write, integer()) ::
+  @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
           [{Mapping.object_type(), integer(), [any()]}]
-  defp chunk_mappings(mappings, module, mode, max_gaps) do
-    max_gaps = normalize_max_gap(max_gaps)
-
-    # Build a set of {type, address} pairs for all gap-safe objects.
-    # During reads, gap tolerance must only bridge gaps where every address
-    # in the gap belongs to a known gap-safe mapping.
-    gap_safe_addresses =
-      if mode == :read do
-        module.__modboss_schema__()
-        |> Map.values()
-        |> Enum.filter(& &1.gap_safe)
-        |> Enum.flat_map(fn mapping ->
-          mapping |> Mapping.address_range() |> Enum.map(&{mapping.type, &1})
-        end)
-        |> MapSet.new()
-      end
-
+  defp chunk_mappings(mappings, module, mode, opts) do
     initial_acc = {_mappings = [], _address_count = 0, _gap_address_count = 0, _largest_gap = 0}
+
+    gap_safe_addresses =
+      if mode == :read and Enum.any?(opts.max_gap, fn {_, size} -> size > 0 end) do
+        gap_safe_addresses(module)
+      else
+        MapSet.new()
+      end
 
     chunk_fun = fn %Mapping{} = mapping, acc ->
       max_chunk = module.__max_batch__(mode, mapping.type)
@@ -682,10 +672,10 @@ defmodule ModBoss do
 
         {[prior_mapping | _] = mappings, running_count, running_gap_count, largest_gap} ->
           gap = Mapping.gap(prior_mapping, mapping)
-          max_gap = if mode == :write, do: 0, else: Map.fetch!(max_gaps, mapping.type)
           total_addresses = running_count + gap.size + mapping.address_count
 
-          if total_addresses <= max_chunk and allow_gap?(gap, mode, max_gap, gap_safe_addresses) do
+          if total_addresses <= max_chunk and
+               eligible_to_batch?(mode, prior_mapping, mapping, gap, gap_safe_addresses, opts) do
             running_gap_count = running_gap_count + gap.size
             largest_gap = max(largest_gap, gap.size)
 
@@ -711,45 +701,60 @@ defmodule ModBoss do
     end)
   end
 
-  defp allow_gap?(gap, mode, max_gap, gap_safe_addresses) when mode in [:read, :write] do
-    cond do
-      gap.size == 0 -> true
-      mode == :write -> false
-      mode == :read -> gap.size <= max_gap and MapSet.subset?(gap.addresses, gap_safe_addresses)
+  defp eligible_to_batch?(:write, prior_mapping, current_mapping, _gap, _safe_addresses, _opts) do
+    is_adjacent(prior_mapping, current_mapping)
+  end
+
+  defp eligible_to_batch?(:read, prior_mapping, current_mapping, gap, gap_safe_addresses, opts) do
+    is_adjacent(prior_mapping, current_mapping) or
+      allow_gap?(gap, current_mapping, gap_safe_addresses, opts)
+  end
+
+  defp gap_safe_addresses(module) do
+    module.__modboss_schema__()
+    |> Map.values()
+    |> Enum.filter(& &1.gap_safe)
+    |> Enum.flat_map(fn mapping ->
+      mapping |> Mapping.address_range() |> Enum.map(&{mapping.type, &1})
+    end)
+    |> MapSet.new()
+  end
+
+  defp allow_gap?(gap, current_mapping, gap_safe_addresses, opts) do
+    max_gap = Map.fetch!(opts.max_gap, current_mapping.type)
+    gap.size <= max_gap and MapSet.subset?(gap.addresses, gap_safe_addresses)
+  end
+
+  @default_max_gap 0
+
+  defp normalize_max_gap(nil), do: new_max_gaps(@default_max_gap)
+  defp normalize_max_gap(size) when is_integer(size) and size >= 0, do: new_max_gaps(size)
+
+  defp normalize_max_gap(sizes) when is_list(sizes) or is_map(sizes) do
+    max_gaps =
+      Enum.into(sizes, new_max_gaps(@default_max_gap), fn
+        {type, size} when is_integer(size) and size >= 0 -> {type, size}
+        {type, value} -> raise "Invalid max_gap size #{inspect(value)} for #{inspect(type)}"
+      end)
+
+    {_sizes, unrecognized_type} = Map.split(max_gaps, @object_types)
+
+    if Map.keys(unrecognized_type) != [] do
+      raise "Invalid max_gap values: #{inspect(unrecognized_type)}"
     end
+
+    max_gaps
   end
 
-  defp normalize_max_gap(size) when is_integer(size) do
-    normalize_max_gap(%{}, size)
-  end
+  defp normalize_max_gap(value), do: raise("Invalid max_gap value: #{inspect(value)}")
 
-  defp normalize_max_gap(sizes) when is_list(sizes) do
-    sizes
-    |> Enum.into(%{})
-    |> normalize_max_gap()
-  end
-
-  defp normalize_max_gap(sizes, default_size \\ 0) when is_map(sizes) do
-    {sizes, others} = Map.split(sizes, @object_types)
-
-    Enum.each(others, fn {key, _value} ->
-      Logger.warning("Invalid #{inspect(key)} gap size specified")
-    end)
-
+  defp new_max_gaps(size) do
     %{
-      holding_register: Map.get(sizes, :holding_registers, default_size),
-      input_register: Map.get(sizes, :input_registers, default_size),
-      coil: Map.get(sizes, :coils, default_size),
-      discrete_input: Map.get(sizes, :discrete_inputs, default_size)
+      holding_register: size,
+      input_register: size,
+      coil: size,
+      discrete_input: size
     }
-    |> Enum.into(%{}, fn
-      {type, size} when is_integer(size) and size >= 0 ->
-        {type, size}
-
-      {type, value} ->
-        Logger.warning("Invalid max gap size #{inspect(value)} for #{inspect(type)}")
-        {type, default_size}
-    end)
   end
 
   defp encode(mappings) do
@@ -792,10 +797,10 @@ defmodule ModBoss do
     end
   end
 
-  @spec maybe_decode([Mapping.t()], boolean()) :: {:ok, [Mapping.t()]} | {:error, String.t()}
-  defp maybe_decode(mappings, false), do: {:ok, mappings}
+  @spec maybe_decode([Mapping.t()], map()) :: {:ok, [Mapping.t()]} | {:error, String.t()}
+  defp maybe_decode(mappings, %{decode: false}), do: {:ok, mappings}
 
-  defp maybe_decode(mappings, true) do
+  defp maybe_decode(mappings, %{decode: true}) do
     Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
       case decode_value(mapping) do
         {:ok, decoded_value} ->
