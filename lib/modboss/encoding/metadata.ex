@@ -11,6 +11,9 @@ defmodule ModBoss.Encoding.Metadata do
   * `:name` — the mapping name (e.g. `:outdoor_temp`)
   * `:type` — the object type (e.g. `:holding_register`)
   * `:address_count` — the number of addresses in the mapping
+  * `:context` — user-provided context map, passed via the `:context` option
+    on `ModBoss.read/4`, `ModBoss.write/4`, or `ModBoss.encode/3`.
+    Defaults to `%{}`.
 
   For example, when encoding ASCII text, `address_count` tells you how many
   registers to pad into. See the implementation of
@@ -22,13 +25,17 @@ defmodule ModBoss.Encoding.Metadata do
   @type t() :: %__MODULE__{
           name: Mapping.name(),
           type: Mapping.object_type(),
-          address_count: Mapping.count()
+          address_count: Mapping.count(),
+          context: map()
         }
 
-  defstruct [:name, :type, :address_count]
+  defstruct [:name, :type, :address_count, context: %{}]
 
   @doc false
-  def from_mapping(%Mapping{} = mapping) do
-    struct!(__MODULE__, Map.take(mapping, [:name, :type, :address_count]))
+  def from_mapping(%Mapping{} = mapping, context \\ %{}) do
+    mapping
+    |> Map.take([:name, :type, :address_count])
+    |> Map.put(:context, context)
+    |> then(&struct!(__MODULE__, &1))
   end
 end

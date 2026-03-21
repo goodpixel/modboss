@@ -519,6 +519,59 @@ defmodule ModBossTest do
       assert message =~ "decode_toggle"
     end
 
+    test "context option flows through to decode metadata" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :temp, as: :contextual
+        end
+
+        def decode_contextual(value, metadata) do
+          case metadata.context do
+            %{unit: :celsius} -> {:ok, value}
+            %{unit: :fahrenheit} -> {:ok, value * 9 / 5 + 32}
+          end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 100})
+
+      assert {:ok, 100} =
+               ModBoss.read(schema, :temp, read_func(device), context: %{unit: :celsius})
+
+      assert {:ok, 212.0} =
+               ModBoss.read(schema, :temp, read_func(device), context: %{unit: :fahrenheit})
+    end
+
+    test "context defaults to an empty map in decode metadata when not provided" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :temp, as: :check_context
+        end
+
+        def decode_check_context(value, metadata) do
+          {:ok, {value, metadata.context}}
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 42})
+
+      assert {:ok, {42, %{}}} = ModBoss.read(schema, :temp, read_func(device))
+    end
+
     test "returns an error if decoding fails" do
       schema = unique_module()
 
@@ -1413,6 +1466,114 @@ defmodule ModBossTest do
              } = get_objects(device)
     end
 
+    test "context option flows through to encode metadata" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :temp, as: :contextual, mode: :w
+        end
+
+        def encode_contextual(value, metadata) do
+          case metadata.context do
+            %{unit: :celsius} -> {:ok, value}
+            %{unit: :fahrenheit} -> {:ok, round((value - 32) * 5 / 9)}
+          end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      :ok = ModBoss.write(schema, %{temp: 212}, write_func(device), context: %{unit: :fahrenheit})
+      assert %{{:holding_register, 1} => 100} = get_objects(device)
+    end
+
+    test "context defaults to an empty map in encode metadata when not provided" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :temp, as: :check_context, mode: :w
+        end
+
+        def encode_check_context(value, metadata) do
+          {:ok, {value, metadata.context}}
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      :ok = ModBoss.write(schema, %{temp: 42}, write_func(device))
+      assert %{{:holding_register, 1} => {42, %{}}} = get_objects(device)
+    end
+
+    test "supports encode functions with arity 2 (with metadata)" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :temp, as: :scaled, mode: :w
+        end
+
+        def encode_scaled(value, metadata) do
+          if metadata.name == :temp do
+            {:ok, value * 10}
+          else
+            {:error, "unexpected name"}
+          end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      :ok = ModBoss.write(schema, %{temp: 5}, write_func(device))
+      assert %{{:holding_register, 1} => 50} = get_objects(device)
+    end
+
+    test "supports external encode functions with arity 2 (with metadata)" do
+      encoder_module = unique_module()
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{encoder_module} do
+        def encode_scaled(value, metadata) do
+          if metadata.name == :temp do
+            {:ok, value * 10}
+          else
+            {:error, "unexpected name"}
+          end
+        end
+      end
+      """)
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :temp, as: {#{encoder_module}, :scaled}, mode: :w
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      :ok = ModBoss.write(schema, %{temp: 5}, write_func(device))
+      assert %{{:holding_register, 1} => 50} = get_objects(device)
+    end
+
     test "supports encode functions with arity 1 (no metadata)" do
       schema = unique_module()
 
@@ -1795,6 +1956,32 @@ defmodule ModBossTest do
                  quux: 2,
                  corge: 1
                })
+    end
+
+    test "context option flows through to encode metadata" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :temp, as: :contextual, mode: :rw
+        end
+
+        def encode_contextual(value, metadata) do
+          case metadata.context do
+            %{unit: :fahrenheit} -> {:ok, round((value - 32) * 5 / 9)}
+            _ -> {:ok, value}
+          end
+        end
+
+        def decode_contextual(value), do: {:ok, value}
+      end
+      """)
+
+      assert {:ok, %{{:holding_register, 1} => 100}} =
+               ModBoss.encode(schema, [temp: 212], context: %{unit: :fahrenheit})
     end
 
     test "returns an error if any mapping names are unrecognized" do
