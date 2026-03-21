@@ -767,12 +767,23 @@ defmodule ModBoss do
   defp get_encode_mfa(%Mapping{as: {module, as}} = mapping) do
     function = String.to_atom("encode_#{as}")
 
-    if exists?(module, function, 2) do
-      metadata = ModBoss.Encoding.Metadata.from_mapping(mapping)
-      {module, function, [mapping.value, metadata]}
-    else
-      {:error,
-       "Expected #{inspect(module)}.#{function}/2 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
+    has_arity_1 = exists?(module, function, 1)
+    has_arity_2 = exists?(module, function, 2)
+
+    cond do
+      has_arity_1 and has_arity_2 ->
+        {:error, "Please define #{inspect(module)}.#{function}/1 or #{function}/2, but not both."}
+
+      has_arity_2 ->
+        metadata = ModBoss.Encoding.Metadata.from_mapping(mapping)
+        {module, function, [mapping.value, metadata]}
+
+      has_arity_1 ->
+        {module, function, [mapping.value]}
+
+      true ->
+        {:error,
+         "Expected #{inspect(module)}.#{function}/1 or #{function}/2 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
     end
   end
 
@@ -808,11 +819,23 @@ defmodule ModBoss do
   defp get_decode_mfa(%Mapping{as: {module, as}} = mapping) do
     function = String.to_atom("decode_#{as}")
 
-    if exists?(module, function, 1) do
-      {module, function, [mapping.encoded_value]}
-    else
-      {:error,
-       "Expected #{inspect(module)}.#{function}/1 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
+    has_arity_1 = exists?(module, function, 1)
+    has_arity_2 = exists?(module, function, 2)
+
+    cond do
+      has_arity_1 and has_arity_2 ->
+        {:error, "Please define #{inspect(module)}.#{function}/1 or #{function}/2, but not both."}
+
+      has_arity_2 ->
+        metadata = ModBoss.Encoding.Metadata.from_mapping(mapping)
+        {module, function, [mapping.encoded_value, metadata]}
+
+      has_arity_1 ->
+        {module, function, [mapping.encoded_value]}
+
+      true ->
+        {:error,
+         "Expected #{inspect(module)}.#{function}/1 or #{function}/2 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
     end
   end
 

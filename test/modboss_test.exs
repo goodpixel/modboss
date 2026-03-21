@@ -377,6 +377,148 @@ defmodule ModBossTest do
                ModBoss.read(schema, [:yep, :nope, :text], read_func(device))
     end
 
+    test "supports decode functions with arity 2 (with metadata)" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :temp, as: :scaled
+        end
+
+        def decode_scaled(value, metadata) do
+          # Use metadata to confirm it flows through
+          if metadata.name == :temp do
+            {:ok, value * 10}
+          else
+            {:error, "unexpected name"}
+          end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 5})
+
+      assert {:ok, 50} = ModBoss.read(schema, :temp, read_func(device))
+    end
+
+    test "supports external decode functions with arity 2 (with metadata)" do
+      decoder_module = unique_module()
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{decoder_module} do
+        def decode_scaled(value, metadata) do
+          if metadata.name == :temp do
+            {:ok, value * 10}
+          else
+            {:error, "unexpected name"}
+          end
+        end
+      end
+      """)
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :temp, as: {#{decoder_module}, :scaled}
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 5})
+
+      assert {:ok, 50} = ModBoss.read(schema, :temp, read_func(device))
+    end
+
+    test "supports external decode functions with arity 1 (no metadata)" do
+      decoder_module = unique_module()
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{decoder_module} do
+        def decode_toggle(1), do: {:ok, :on}
+        def decode_toggle(0), do: {:ok, :off}
+      end
+      """)
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :switch, as: {#{decoder_module}, :toggle}
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 1})
+
+      assert {:ok, :on} = ModBoss.read(schema, :switch, read_func(device))
+    end
+
+    test "returns error when external decode function has both arities" do
+      decoder_module = unique_module()
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{decoder_module} do
+        def decode_toggle(1, _meta), do: {:ok, :on}
+        def decode_toggle(1), do: {:ok, :on}
+      end
+      """)
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :switch, as: {#{decoder_module}, :toggle}
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 1})
+
+      assert {:error, message} = ModBoss.read(schema, :switch, read_func(device))
+      assert message =~ "decode_toggle/1 or decode_toggle/2, but not both"
+    end
+
+    test "returns error when external decode function has neither arity" do
+      decoder_module = unique_module()
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{decoder_module} do
+        # No decode function defined
+      end
+      """)
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :switch, as: {#{decoder_module}, :toggle}
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 1})
+
+      assert {:error, message} = ModBoss.read(schema, :switch, read_func(device))
+      assert message =~ "decode_toggle"
+    end
+
     test "returns an error if decoding fails" do
       schema = unique_module()
 
@@ -1253,8 +1395,8 @@ defmodule ModBossTest do
           holding_register 3..5, :text, as: {Encoding, :ascii}, mode: :w
         end
 
-        def encode_boolean(false, _), do: {:ok, 0}
-        def encode_boolean(true, _), do: {:ok, 1}
+        def encode_boolean(false), do: {:ok, 0}
+        def encode_boolean(true), do: {:ok, 1}
       end
       """)
 
@@ -1269,6 +1411,114 @@ defmodule ModBossTest do
                {:holding_register, 4} => 8311,
                {:holding_register, 5} => 28535
              } = get_objects(device)
+    end
+
+    test "supports encode functions with arity 1 (no metadata)" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :yep, as: :boolean, mode: :w
+          holding_register 2, :nope, as: :boolean, mode: :w
+        end
+
+        def encode_boolean(true), do: {:ok, 1}
+        def encode_boolean(false), do: {:ok, 0}
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      :ok = ModBoss.write(schema, %{yep: true, nope: false}, write_func(device))
+
+      assert %{
+               {:holding_register, 1} => 1,
+               {:holding_register, 2} => 0
+             } = get_objects(device)
+    end
+
+    test "supports external encode functions with arity 1 (no metadata)" do
+      encoder_module = unique_module()
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{encoder_module} do
+        def encode_toggle(:on), do: {:ok, 1}
+        def encode_toggle(:off), do: {:ok, 0}
+      end
+      """)
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :switch, as: {#{encoder_module}, :toggle}, mode: :w
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      :ok = ModBoss.write(schema, %{switch: :on}, write_func(device))
+
+      assert %{{:holding_register, 1} => 1} = get_objects(device)
+    end
+
+    test "returns error when external encode function has both arities" do
+      encoder_module = unique_module()
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{encoder_module} do
+        def encode_toggle(:on, _meta), do: {:ok, 1}
+        def encode_toggle(:on), do: {:ok, 1}
+      end
+      """)
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :switch, as: {#{encoder_module}, :toggle}, mode: :w
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert {:error, message} = ModBoss.write(schema, %{switch: :on}, write_func(device))
+      assert message =~ "encode_toggle/1 or encode_toggle/2, but not both"
+    end
+
+    test "returns error when external encode function has neither arity" do
+      encoder_module = unique_module()
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{encoder_module} do
+        # No encode_toggle function defined at all
+      end
+      """)
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :switch, as: {#{encoder_module}, :toggle}, mode: :w
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert {:error, message} = ModBoss.write(schema, %{switch: :on}, write_func(device))
+      assert message =~ "encode_toggle"
     end
 
     test "returns an error if the number of values doesn't match the number of mapped addresses" do

@@ -189,6 +189,130 @@ defmodule ModBoss.SchemaTest do
     end
   end
 
+  describe "compile-time encode/decode validation" do
+    test "raises a compile error when a writable local mapping has no encode function at either arity" do
+      assert_raise CompileError, ~r/encode_missing/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema
+
+          schema do
+            holding_register 1, :foo, as: :missing, mode: :w
+          end
+        end
+        """)
+      end
+    end
+
+    test "does not raise when a writable local mapping has an arity-2 encode function" do
+      Code.compile_string("""
+      defmodule #{unique_module()} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo, as: :toggle, mode: :w
+        end
+
+        def encode_toggle(_value, _metadata), do: {:ok, 1}
+      end
+      """)
+    end
+
+    test "raises a compile error when both arity-1 and arity-2 encode functions are defined" do
+      assert_raise CompileError,
+                   ~r/define encode_boolean\/1 or encode_boolean\/2, but not both/,
+                   fn ->
+                     Code.compile_string("""
+                     defmodule #{unique_module()} do
+                       use ModBoss.Schema
+
+                       schema do
+                         holding_register 1, :foo, as: :boolean, mode: :w
+                       end
+
+                       def encode_boolean(true, _metadata), do: {:ok, 1}
+                       def encode_boolean(true), do: {:ok, 1}
+                     end
+                     """)
+                   end
+    end
+
+    test "does not raise when a writable local mapping has an arity-1 encode function" do
+      Code.compile_string("""
+      defmodule #{unique_module()} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo, as: :toggle, mode: :w
+        end
+
+        def encode_toggle(_value), do: {:ok, 1}
+      end
+      """)
+    end
+
+    test "raises a compile error when a readable local mapping has no decode function at either arity" do
+      assert_raise CompileError, ~r/decode_missing/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema
+
+          schema do
+            holding_register 1, :foo, as: :missing
+          end
+        end
+        """)
+      end
+    end
+
+    test "does not raise when a readable local mapping has an arity-1 decode function" do
+      Code.compile_string("""
+      defmodule #{unique_module()} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo, as: :toggle
+        end
+
+        def decode_toggle(_value), do: {:ok, :on}
+      end
+      """)
+    end
+
+    test "does not raise when a readable local mapping has an arity-2 decode function" do
+      Code.compile_string("""
+      defmodule #{unique_module()} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo, as: :toggle
+        end
+
+        def decode_toggle(_value, _metadata), do: {:ok, :on}
+      end
+      """)
+    end
+
+    test "raises a compile error when both arity-1 and arity-2 decode functions are defined" do
+      assert_raise CompileError,
+                   ~r/define decode_toggle\/1 or decode_toggle\/2, but not both/,
+                   fn ->
+                     Code.compile_string("""
+                     defmodule #{unique_module()} do
+                       use ModBoss.Schema
+
+                       schema do
+                         holding_register 1, :foo, as: :toggle
+                       end
+
+                       def decode_toggle(_value, _metadata), do: {:ok, :on}
+                       def decode_toggle(_value), do: {:ok, :on}
+                     end
+                     """)
+                   end
+    end
+  end
+
   defp unique_module do
     "#{__MODULE__}#{System.unique_integer([:positive])}"
   end
