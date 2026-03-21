@@ -65,6 +65,26 @@ defmodule ModBoss.Telemetry do
         result: term()
       }
 
+  ### Read Exception
+      # Event
+      [:modboss, :read, :exception]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        kind: atom(),
+        reason: term(),
+        stacktrace: list()
+      }
+
   ### Write Start
       # Event
       [:modboss, :write, :start]
@@ -101,6 +121,26 @@ defmodule ModBoss.Telemetry do
         names: [atom()],
         label: term(),
         result: term()
+      }
+
+  ### Write Exception
+      # Event
+      [:modboss, :write, :exception]
+
+      # Measurements
+      %{
+        duration: integer(),
+        monotonic_time: integer()
+      }
+
+      # Metadata
+      %{
+        schema: module(),
+        names: [atom()],
+        label: term(),
+        kind: atom(),
+        reason: term(),
+        stacktrace: list()
       }
 
   ## Per-callback events

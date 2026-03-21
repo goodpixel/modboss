@@ -75,7 +75,7 @@ In this example:
 
 ### 2. Provide generic read/write functions
 
-You'll need to provide a `read_func/3` and a `write func/3` for actually
+You'll need to provide a `read_func/3` and a `write_func/3` for actually
 interacting on the Modbus. In practice, these functions will likely build on a library like
 [Modbux](https://hexdocs.pm/modbux/readme.html) along with state stored in a GenServer (e.g.
 a `modbux_pid`, IP Address, etc.) to perform the read/write operations.
@@ -97,8 +97,8 @@ It must return either `:ok` or `{:error, message}`.
 
 ```elixir
 write_func = fn object_type, starting_address, value_or_values ->
-  result = custom_write_logic(…)
-  {:ok, result}
+  custom_write_logic(…)
+  :ok
 end
 ```
 
