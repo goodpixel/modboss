@@ -65,11 +65,11 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :read, :stop], stop_measurements, stop_metadata}
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
-      assert stop_measurements.modbus_requests == 1
+      assert stop_measurements.batches == 1
       assert stop_measurements.objects_requested == 1
       assert stop_measurements.addresses_read == 1
       assert stop_measurements.gap_addresses_read == 0
-      assert stop_measurements.max_gap_size == 0
+      assert stop_measurements.largest_gap == 0
       assert stop_measurements.total_attempts == 1
       assert stop_metadata.schema == TestSchema
       assert stop_metadata.names == [:foo]
@@ -101,7 +101,7 @@ defmodule ModBoss.TelemetryTest do
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
       assert stop_measurements.gap_addresses_read == 0
-      assert stop_measurements.max_gap_size == 0
+      assert stop_measurements.largest_gap == 0
       assert stop_metadata.schema == TestSchema
       assert stop_metadata.names == [:foo]
       assert stop_metadata.object_type == :holding_register
@@ -131,7 +131,7 @@ defmodule ModBoss.TelemetryTest do
 
       # Batched reads
       assert_receive {:telemetry, [:modboss, :read, :stop], read_measurements, _stop_metadata}
-      assert read_measurements.modbus_requests == 2
+      assert read_measurements.batches == 2
       assert read_measurements.objects_requested == 3
       assert read_measurements.total_attempts == 2
 
@@ -157,7 +157,7 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :read, :stop], read_measurements, _}
       assert read_measurements.objects_requested == 3
       assert read_measurements.addresses_read == 3
-      assert read_measurements.modbus_requests == 1
+      assert read_measurements.batches == 1
       assert read_measurements.total_attempts == 1
 
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _req_measurements, req_meta}
@@ -183,11 +183,11 @@ defmodule ModBoss.TelemetryTest do
 
       # Per-operation: 1 request, 2 objects requested, 5 addresses read, 3 gap addresses
       assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
-      assert measurements.modbus_requests == 1
+      assert measurements.batches == 1
       assert measurements.objects_requested == 2
       assert measurements.addresses_read == 5
       assert measurements.gap_addresses_read == 3
-      assert measurements.max_gap_size == 3
+      assert measurements.largest_gap == 3
       assert measurements.total_attempts == 1
 
       # Per-request: single request spanning addresses 1-5
@@ -195,7 +195,7 @@ defmodule ModBoss.TelemetryTest do
       assert req_meta.address_count == 5
       assert req_meta.attempt == 1
       assert req_measurements.gap_addresses_read == 3
-      assert req_measurements.max_gap_size == 3
+      assert req_measurements.largest_gap == 3
     end
 
     test "reports multiple gaps correctly", %{device: device} do
@@ -213,18 +213,18 @@ defmodule ModBoss.TelemetryTest do
         ModBoss.read(GapSchema, [:alpha, :charlie, :echo], read_func(device), max_gap: 10)
 
       assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
-      assert measurements.modbus_requests == 1
+      assert measurements.batches == 1
       assert measurements.objects_requested == 3
       assert measurements.addresses_read == 5
       assert measurements.gap_addresses_read == 2
       # Two gaps of size 1 each (addr 2 and addr 4)
-      assert measurements.max_gap_size == 1
+      assert measurements.largest_gap == 1
       assert measurements.total_attempts == 1
 
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], req_measurements, req_meta}
       assert req_meta.attempt == 1
       assert req_measurements.gap_addresses_read == 2
-      assert req_measurements.max_gap_size == 1
+      assert req_measurements.largest_gap == 1
     end
 
     test "reports zero gap measurements without max_gap", %{device: device} do
@@ -237,7 +237,7 @@ defmodule ModBoss.TelemetryTest do
 
       assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
       assert measurements.gap_addresses_read == 0
-      assert measurements.max_gap_size == 0
+      assert measurements.largest_gap == 0
       assert measurements.total_attempts == 1
       assert measurements.addresses_read == measurements.objects_requested
     end
@@ -275,10 +275,10 @@ defmodule ModBoss.TelemetryTest do
 
       # 1 object requested, 1 request attempted, 1 address attempted
       assert stop_measurements.objects_requested == 1
-      assert stop_measurements.modbus_requests == 1
+      assert stop_measurements.batches == 1
       assert stop_measurements.addresses_read == 1
       assert stop_measurements.gap_addresses_read == 0
-      assert stop_measurements.max_gap_size == 0
+      assert stop_measurements.largest_gap == 0
       assert stop_measurements.total_attempts == 1
 
       assert_receive {:telemetry, [:modboss, :read_callback, :start], _, _}
@@ -336,7 +336,7 @@ defmodule ModBoss.TelemetryTest do
       assert metadata.result == {:error, "timeout"}
 
       # 3 planned, but only 2 attempted (1 succeeded + 1 failed)
-      assert measurements.modbus_requests == 2
+      assert measurements.batches == 2
 
       # 2 objects in chunk 1 + 2 objects in chunk 2
       assert measurements.objects_requested == 4
@@ -348,7 +348,7 @@ defmodule ModBoss.TelemetryTest do
       assert measurements.gap_addresses_read == 5
 
       # 3 gap addresses from chunk 2 (vs. 2 gap address from chunk 1)
-      assert measurements.max_gap_size == 3
+      assert measurements.largest_gap == 3
 
       # attempted the read callback twice
       assert measurements.total_attempts == 2
@@ -507,7 +507,7 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :write, :stop], stop_measurements, stop_metadata}
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
-      assert stop_measurements.modbus_requests == 1
+      assert stop_measurements.batches == 1
       assert stop_measurements.objects_requested == 1
       assert stop_measurements.total_attempts == 1
       assert stop_metadata.schema == TestSchema
@@ -555,7 +555,7 @@ defmodule ModBoss.TelemetryTest do
 
       # Batched writes
       assert_receive {:telemetry, [:modboss, :write, :stop], write_measurements, _}
-      assert write_measurements.modbus_requests == 2
+      assert write_measurements.batches == 2
       assert write_measurements.objects_requested == 3
       assert write_measurements.total_attempts == 2
 
@@ -576,7 +576,7 @@ defmodule ModBoss.TelemetryTest do
 
       assert_receive {:telemetry, [:modboss, :write, :stop], write_measurements, _}
       assert write_measurements.objects_requested == 3
-      assert write_measurements.modbus_requests == 1
+      assert write_measurements.batches == 1
       assert write_measurements.total_attempts == 1
 
       assert_receive {:telemetry, [:modboss, :write_callback, :stop], _req_measurements, req_meta}
@@ -595,7 +595,7 @@ defmodule ModBoss.TelemetryTest do
 
       assert_receive {:telemetry, [:modboss, :write, :stop], stop_measurements, write_metadata}
       assert write_metadata.result == {:error, "device busy"}
-      assert stop_measurements.modbus_requests == 1
+      assert stop_measurements.batches == 1
       assert stop_measurements.objects_requested == 1
       assert stop_measurements.total_attempts == 1
 
@@ -639,7 +639,7 @@ defmodule ModBoss.TelemetryTest do
       assert metadata.result == {:error, "timeout"}
 
       # 3 planned, but only 2 attempted (1 succeeded + 1 failed)
-      assert measurements.modbus_requests == 2
+      assert measurements.batches == 2
       assert measurements.objects_requested == 2
       assert measurements.total_attempts == 2
     end
