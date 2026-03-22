@@ -54,7 +54,7 @@ defmodule ModBoss.Telemetry do
         objects_requested: non_neg_integer(),
         addresses_read: non_neg_integer(),
         gap_addresses_read: non_neg_integer(),
-        max_gap_size: non_neg_integer()
+        largest_gap: non_neg_integer()
       }
 
       # Metadata
@@ -182,7 +182,7 @@ defmodule ModBoss.Telemetry do
         duration: integer(),
         monotonic_time: integer(),
         gap_addresses_read: non_neg_integer(),
-        max_gap_size: non_neg_integer()
+        largest_gap: non_neg_integer()
       }
 
       # Metadata
@@ -308,7 +308,7 @@ defmodule ModBoss.Telemetry do
   * `addresses_read` — total addresses attempted on the wire, including gap
     addresses (read operations only).
   * `gap_addresses_read` — gap addresses read and discarded (read events only).
-  * `max_gap_size` — largest address gap bridged (read events only).
+  * `largest_gap` — largest address gap bridged (read events only).
 
   > #### Partial failures {: .info}
   >

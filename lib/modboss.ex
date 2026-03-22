@@ -194,7 +194,7 @@ defmodule ModBoss do
           modbus_requests: stats.requests,
           addresses_read: stats.addresses,
           gap_addresses_read: stats.gap_addresses,
-          max_gap_size: stats.largest_gap,
+          largest_gap: stats.largest_gap,
           total_attempts: stats.total_attempts
         }
 
@@ -288,7 +288,7 @@ defmodule ModBoss do
 
           :telemetry.span([:modboss, :read_callback], start_metadata, fn ->
             result = read_func.(type, starting_address, address_count)
-            stop_measurements = %{gap_addresses_read: gap_addresses, max_gap_size: largest_gap}
+            stop_measurements = %{gap_addresses_read: gap_addresses, largest_gap: largest_gap}
             stop_metadata = Map.put(start_metadata, :result, result)
 
             {result, stop_measurements, stop_metadata}
