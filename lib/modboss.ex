@@ -191,7 +191,7 @@ defmodule ModBoss do
 
         stop_measurements = %{
           objects_requested: stats.objects,
-          modbus_requests: stats.requests,
+          batches: stats.batches,
           addresses_read: stats.addresses,
           gap_addresses_read: stats.gap_addresses,
           largest_gap: stats.largest_gap,
@@ -228,7 +228,7 @@ defmodule ModBoss do
   defp read_chunks(chunks, module, read_func, opts) do
     initial_stats = %{
       objects: 0,
-      requests: 0,
+      batches: 0,
       addresses: 0,
       gap_addresses: 0,
       largest_gap: 0,
@@ -255,7 +255,7 @@ defmodule ModBoss do
 
       updated_stats = %{
         objects: stats.objects + object_count,
-        requests: stats.requests + 1,
+        batches: stats.batches + 1,
         addresses: stats.addresses + address_count,
         gap_addresses: stats.gap_addresses + gap_addresses,
         largest_gap: max(stats.largest_gap, largest_gap),
@@ -553,7 +553,7 @@ defmodule ModBoss do
 
         stop_measurements = %{
           objects_requested: stats.objects,
-          modbus_requests: stats.requests,
+          batches: stats.batches,
           total_attempts: stats.total_attempts
         }
 
@@ -569,7 +569,7 @@ defmodule ModBoss do
   end
 
   defp write_mappings(module, mappings, write_func, opts) do
-    initial_stats = %{objects: 0, requests: 0, total_attempts: 0}
+    initial_stats = %{objects: 0, batches: 0, total_attempts: 0}
 
     mappings
     |> chunk_mappings(module, :write, opts)
@@ -591,7 +591,7 @@ defmodule ModBoss do
 
       updated_stats = %{
         objects: stats.objects + address_count,
-        requests: stats.requests + 1,
+        batches: stats.batches + 1,
         total_attempts: stats.total_attempts + attempts
       }
 

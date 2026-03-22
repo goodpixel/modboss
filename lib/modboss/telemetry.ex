@@ -49,7 +49,7 @@ defmodule ModBoss.Telemetry do
       %{
         duration: integer(),
         monotonic_time: integer(),
-        modbus_requests: non_neg_integer(),
+        batches: non_neg_integer(),
         total_attempts: pos_integer(),
         objects_requested: non_neg_integer(),
         addresses_read: non_neg_integer(),
@@ -110,7 +110,7 @@ defmodule ModBoss.Telemetry do
       %{
         duration: integer(),
         monotonic_time: integer(),
-        modbus_requests: non_neg_integer(),
+        batches: non_neg_integer(),
         total_attempts: pos_integer(),
         objects_requested: non_neg_integer()
       }
@@ -297,12 +297,11 @@ defmodule ModBoss.Telemetry do
 
   * `duration` — elapsed time in native time units. Convert with
     `System.convert_time_unit(duration, :native, :millisecond)`.
-  * `modbus_requests` — number of batches for the operation. Each contiguous
-    address range of one object type is one request. Note that this _does not_
-    account for retries.
+  * `batches` — number of batches attempted for the operation. Each contiguous
+    address range of one object type is one batch. Does not account for retries.
   * `total_attempts` — total number of `read_func`/`write_func` invocations,
-    including retries. Equal to `modbus_requests` when no retries were needed.
-    The difference of `total_attempts - modbus_requests` is the number of retries.
+    including retries. Equal to `batches` when no retries were needed.
+    The difference of `total_attempts - batches` is the number of retries.
   * `objects_requested` — total Modbus objects (registers/coils) covered by
     attempted callbacks.
   * `addresses_read` — total addresses attempted on the wire, including gap
@@ -314,9 +313,9 @@ defmodule ModBoss.Telemetry do
   >
   > When an operation requires multiple callbacks and one fails partway through,
   > measurements reflect what was **attempted** (including the failed callback),
-  > not what was planned. For example, if a read batches into 3 callbacks and
-  > the 2nd fails, `modbus_requests` will be `2`, and `objects_requested` and
-  > `addresses_read` will cover only the first two batches.
+  > not what was planned. For example, if a read groups into 3 address batches
+  > and the 2nd fails, `batches` will be `2`, and `objects_requested` and
+  > `addresses_read` will cover only those first 2 batches.
 
   ## Metadata details
 
