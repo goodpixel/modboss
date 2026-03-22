@@ -50,10 +50,9 @@ defmodule MyDevice.Schema do
     holding_register 1, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
     holding_register 2..5, :model_name, as: {ModBoss.Encoding, :ascii}
     holding_register 6, :version, as: :fw_version, mode: :rw
-    # Also supports: input_register / coil / discrete_input
   end
 
-  def encode_fw_version(value, _metadata) do
+  def encode_fw_version(value) do
     encoded_value = do_encode(value)
     {:ok, encoded_value}
   end
@@ -92,8 +91,8 @@ end
 ```
 
 For each batch, the `write_func` will be provided the type of object (`:holding_register` or
-`:coil`), the starting address for the batch to be written, and a list of values to write.
-It must return either `:ok` or `{:error, message}`.
+`:coil`), the starting address for the batch to be written, and a single value or list of values
+to write. It must return either `:ok` or `{:error, message}`.
 
 ```elixir
 write_func = fn object_type, starting_address, value_or_values ->
