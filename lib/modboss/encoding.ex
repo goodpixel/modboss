@@ -19,7 +19,7 @@ defmodule ModBoss.Encoding do
   alias ModBoss.Encoding.Metadata
 
   @doc false
-  def encode_raw(value_or_values, _), do: {:ok, value_or_values}
+  def encode_raw(value_or_values), do: {:ok, value_or_values}
 
   @doc false
   def decode_raw(value_or_values), do: {:ok, value_or_values}
@@ -29,15 +29,15 @@ defmodule ModBoss.Encoding do
 
   ## Examples
 
-      iex> encode_boolean(true, %{})
+      iex> encode_boolean(true)
       {:ok, 1}
 
-      iex> encode_boolean(false, %{})
+      iex> encode_boolean(false)
       {:ok, 0}
   """
-  @spec encode_boolean(boolean(), Metadata.t()) :: {:ok, integer()} | {:error, binary()}
-  def encode_boolean(true, _metadata), do: {:ok, 1}
-  def encode_boolean(false, _metadata), do: {:ok, 0}
+  @spec encode_boolean(boolean()) :: {:ok, integer()} | {:error, binary()}
+  def encode_boolean(true), do: {:ok, 1}
+  def encode_boolean(false), do: {:ok, 0}
 
   @doc """
   Interpret `1` as `true` and `0` as `false`
@@ -64,16 +64,15 @@ defmodule ModBoss.Encoding do
 
   ## Examples
 
-      iex> {:ok, 65_535} = encode_unsigned_int(65_535, %{})
-      iex> {:error, _too_large} = encode_unsigned_int(65_536, %{})
+      iex> {:ok, 65_535} = encode_unsigned_int(65_535)
+      iex> {:error, _too_large} = encode_unsigned_int(65_536)
   """
-  @spec encode_unsigned_int(non_neg_integer(), Metadata.t()) ::
-          {:ok, non_neg_integer()} | {:error, binary()}
-  def encode_unsigned_int(value, _metadata) when value >= 0 and value <= 65_535 do
+  @spec encode_unsigned_int(non_neg_integer()) :: {:ok, non_neg_integer()} | {:error, binary()}
+  def encode_unsigned_int(value) when value >= 0 and value <= 65_535 do
     {:ok, value}
   end
 
-  def encode_unsigned_int(value, _metadata) do
+  def encode_unsigned_int(value) do
     {:error, "Value #{value} is outside the range of a 16-bit unsigned integer (0 to 65,535)"}
   end
 
@@ -101,16 +100,15 @@ defmodule ModBoss.Encoding do
 
   ## Examples
 
-      iex> {:ok, -32_768} = encode_signed_int(-32_768, %{})
-      iex> {:error, _too_large} = encode_signed_int(32_768, %{})
+      iex> {:ok, -32_768} = encode_signed_int(-32_768)
+      iex> {:error, _too_large} = encode_signed_int(32_768)
   """
-  @spec encode_signed_int(integer(), Metadata.t()) :: {:ok, integer()} | {:error, binary()}
-  def encode_signed_int(value, _metadata)
-      when is_integer(value) and value >= -32768 and value <= 32767 do
+  @spec encode_signed_int(integer()) :: {:ok, integer()} | {:error, binary()}
+  def encode_signed_int(value) when is_integer(value) and value >= -32768 and value <= 32767 do
     {:ok, value}
   end
 
-  def encode_signed_int(value, _metadata) do
+  def encode_signed_int(value) do
     {:error, "Value #{value} is outside the range of a 16-bit signed integer (-32768 to 32767)"}
   end
 

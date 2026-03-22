@@ -38,7 +38,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term()
+        context: map()
       }
 
   ### Read Stop
@@ -61,7 +61,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         result: term()
       }
 
@@ -79,7 +79,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         kind: atom(),
         reason: term(),
         stacktrace: list()
@@ -99,7 +99,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term()
+        context: map()
       }
 
   ### Write Stop
@@ -119,7 +119,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         result: term()
       }
 
@@ -137,7 +137,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         kind: atom(),
         reason: term(),
         stacktrace: list()
@@ -165,7 +165,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
@@ -189,7 +189,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
@@ -212,7 +212,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
@@ -237,7 +237,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
@@ -259,7 +259,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
@@ -282,7 +282,7 @@ defmodule ModBoss.Telemetry do
       %{
         schema: module(),
         names: [atom()],
-        label: term(),
+        context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
         address_count: pos_integer(),
@@ -323,9 +323,8 @@ defmodule ModBoss.Telemetry do
   * `schema` — the schema module (e.g. `MyDevice.Schema`).
   * `names` — mapping name(s) as a list of atoms. On per-operation events, all
     requested names; on per-callback events, only the names in that batch.
-  * `label` — the value of the `:telemetry_label` option passed to
-    `ModBoss.read/4` or `ModBoss.write/4`. Can be any term — an atom, tuple, map, etc.
-    _Only present when the `:telemetry_label` option is provided._
+  * `context` — the value of the `:context` option passed to `ModBoss.read/4`
+    or `ModBoss.write/4`. Always present; defaults to `%{}` when not provided.
   * `result` — the raw result: `{:ok, value}` or `{:error, reason}` for reads;
     `:ok` or `{:error, reason}` for writes.
   * `object_type` — `:holding_register`, `:input_register`, `:coil`, or `:discrete_input`.

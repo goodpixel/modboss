@@ -63,9 +63,12 @@ defmodule ModBoss do
     * `:max_attempts` — maximum number of times each `read_func` callback will
       be attempted before giving up. Defaults to `1` (no retries). Only
       `{:error, _}` triggers a retry; exceptions are not retried.
-    * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
-      event metadata. Useful for identifying which device or connection a
-      request belongs to. See `ModBoss.Telemetry` for details.
+    * `:context` — a map of arbitrary data that will be included in the
+      `ModBoss.Encoding.Metadata` struct passed to decode functions (when using
+      2-arity decoders) and in telemetry event metadata. Defaults to `%{}`.
+      Useful for conditionally decoding values based on runtime information
+      like firmware version or hardware revision, and for identifying which
+      device or connection a request belongs to in telemetry handlers.
 
   > #### Gaps {: .info}
   >
@@ -144,7 +147,7 @@ defmodule ModBoss do
     max_attempts: 1,
     decode: true,
     debug: false,
-    telemetry_label: nil
+    context: %{}
   }
 
   defp evaluate_read_opts(module, name_or_names, opts) do
@@ -156,7 +159,7 @@ defmodule ModBoss do
       end
 
     {supported_opts, unsupported_opts} =
-      Keyword.split(opts, [:max_gap, :max_attempts, :debug, :decode, :telemetry_label])
+      Keyword.split(opts, [:max_gap, :max_attempts, :debug, :decode, :context])
 
     if unsupported_opts != [] do
       raise "Unrecognized opts: #{inspect(unsupported_opts)}"
@@ -168,6 +171,7 @@ defmodule ModBoss do
       |> Map.put(:plurality, plurality)
       |> Map.put(:max_gap, normalize_max_gap(supported_opts[:max_gap]))
       |> validate!(:max_attempts)
+      |> validate!(:context)
 
     {names, validated_opts}
   end
@@ -180,7 +184,7 @@ defmodule ModBoss do
 
   if Code.ensure_loaded?(:telemetry) do
     defp do_reads(module, names, mappings, read_func, opts) do
-      start_metadata = %{schema: module, names: names} |> maybe_put_label(opts.telemetry_label)
+      start_metadata = %{schema: module, names: names, context: opts.context}
 
       :telemetry.span([:modboss, :read], start_metadata, fn ->
         {result, stats} = read_mappings(module, mappings, read_func, opts)
@@ -198,9 +202,6 @@ defmodule ModBoss do
         {result, stop_measurements, stop_metadata}
       end)
     end
-
-    defp maybe_put_label(metadata, nil), do: metadata
-    defp maybe_put_label(metadata, label), do: Map.put(metadata, :label, label)
   else
     defp do_reads(module, _names, mappings, read_func, opts) do
       {result, _} = read_mappings(module, mappings, read_func, opts)
@@ -273,15 +274,14 @@ defmodule ModBoss do
       max_attempts = opts.max_attempts
 
       fn type, starting_address, address_count ->
-        metadata =
-          %{
-            schema: module,
-            names: names,
-            object_type: type,
-            starting_address: starting_address,
-            address_count: address_count
-          }
-          |> maybe_put_label(opts.telemetry_label)
+        metadata = %{
+          schema: module,
+          names: names,
+          object_type: type,
+          starting_address: starting_address,
+          address_count: address_count,
+          context: opts.context
+        }
 
         retry(max_attempts, fn attempt ->
           start_metadata = Map.merge(metadata, %{attempt: attempt, max_attempts: max_attempts})
@@ -384,18 +384,39 @@ defmodule ModBoss do
 
   Returns a map with keys of the form `{type, address}` and `encoded_value` as values.
 
+  ## Opts
+    * `:context` — a map of arbitrary data that will be included in the
+      `ModBoss.Encoding.Metadata` struct passed to encode functions (when using
+      2-arity encoders). Defaults to `%{}`.
+
   ## Example
 
       iex> ModBoss.encode(MyDevice.Schema, foo: "Yay")
       {:ok, %{{:holding_register, 15} => 22881, {:holding_register, 16} => 30976}}
   """
-  @spec encode(module(), values()) :: {:ok, map()} | {:error, String.t()}
-  def encode(module, values) when is_atom(module) do
+  @spec encode(module(), values(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def encode(module, values, opts \\ []) when is_atom(module) do
+    opts = evaluate_encode_opts(opts)
+
     with {:ok, mappings} <- get_mappings(:any, module, get_keys(values)),
          mappings <- put_values(mappings, values),
-         {:ok, mappings} <- encode(mappings) do
+         {:ok, mappings} <- encode_mappings(mappings, opts.context) do
       {:ok, flatten_encoded_values(mappings)}
     end
+  end
+
+  @default_encode_opts %{context: %{}}
+
+  defp evaluate_encode_opts(opts) do
+    {opts, remaining_opts} = Keyword.split(opts, [:context])
+
+    if remaining_opts != [] do
+      raise "Unrecognized opts: #{inspect(remaining_opts)}"
+    end
+
+    opts
+    |> Enum.into(@default_encode_opts)
+    |> validate!(:context)
   end
 
   defp flatten_encoded_values(mappings) do
@@ -439,9 +460,12 @@ defmodule ModBoss do
     * `:max_attempts` — maximum number of times each `write_func` callback will
       be attempted before giving up. Defaults to `1` (no retries). Only
       `{:error, _}` triggers a retry; exceptions are not retried.
-    * `:telemetry_label` — an arbitrary term attached as `label` in telemetry
-      event metadata. Useful for identifying which device or connection a
-      request belongs to. See `ModBoss.Telemetry` for details.
+    * `:context` — a map of arbitrary data that will be included in the
+      `ModBoss.Encoding.Metadata` struct passed to encode functions (when using
+      2-arity encoders) and in telemetry event metadata. Defaults to `%{}`.
+      Useful for conditionally encoding values based on runtime information
+      like firmware version or hardware revision, and for identifying which
+      device or connection a request belongs to in telemetry handlers.
 
   ## Example
 
@@ -461,7 +485,7 @@ defmodule ModBoss do
 
     with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values),
-         {:ok, mappings} <- encode(mappings) do
+         {:ok, mappings} <- encode_mappings(mappings, opts.context) do
       do_writes(module, names, mappings, write_func, opts)
     end
   end
@@ -469,10 +493,10 @@ defmodule ModBoss do
   defp get_keys(params) when is_map(params), do: Map.keys(params)
   defp get_keys(params) when is_list(params), do: Keyword.keys(params)
 
-  @default_write_opts %{max_attempts: 1, telemetry_label: nil}
+  @default_write_opts %{max_attempts: 1, context: %{}}
 
   defp evaluate_write_opts(opts) do
-    {opts, remaining_opts} = Keyword.split(opts, [:max_attempts, :telemetry_label])
+    {opts, remaining_opts} = Keyword.split(opts, [:max_attempts, :context])
 
     if remaining_opts != [] do
       raise "Unrecognized opts: #{inspect(remaining_opts)}"
@@ -481,6 +505,7 @@ defmodule ModBoss do
     opts
     |> Enum.into(@default_write_opts)
     |> validate!(:max_attempts)
+    |> validate!(:context)
   end
 
   defp put_values(mappings, params) do
@@ -521,7 +546,7 @@ defmodule ModBoss do
 
   if Code.ensure_loaded?(:telemetry) do
     defp do_writes(module, names, mappings, write_func, opts) do
-      start_metadata = %{schema: module, names: names} |> maybe_put_label(opts.telemetry_label)
+      start_metadata = %{schema: module, names: names, context: opts.context}
 
       :telemetry.span([:modboss, :write], start_metadata, fn ->
         {result, stats} = write_mappings(module, mappings, write_func, opts)
@@ -582,15 +607,14 @@ defmodule ModBoss do
       max_attempts = opts.max_attempts
 
       fn type, starting_address, value_or_values ->
-        metadata =
-          %{
-            schema: module,
-            names: names,
-            object_type: type,
-            starting_address: starting_address,
-            address_count: address_count
-          }
-          |> maybe_put_label(opts.telemetry_label)
+        metadata = %{
+          schema: module,
+          names: names,
+          object_type: type,
+          starting_address: starting_address,
+          address_count: address_count,
+          context: opts.context
+        }
 
         retry(max_attempts, fn attempt ->
           start_metadata = Map.merge(metadata, %{attempt: attempt, max_attempts: max_attempts})
@@ -624,6 +648,7 @@ defmodule ModBoss do
   end
 
   defp validate!(%{max_attempts: a} = opts, :max_attempts) when is_integer(a) and a >= 1, do: opts
+  defp validate!(%{context: c} = opts, :context) when is_map(c), do: opts
   defp validate!(opts, opt), do: raise("Invalid option #{inspect([{opt, opts[opt]}])}.")
 
   @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
@@ -736,9 +761,9 @@ defmodule ModBoss do
     }
   end
 
-  defp encode(mappings) do
+  defp encode_mappings(mappings, context) do
     Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
-      case encode_value(mapping) do
+      case encode_value(mapping, context) do
         {:ok, encoded_value} ->
           updated_mapping = %{mapping | encoded_value: encoded_value}
           {:cont, {:ok, [updated_mapping | acc]}}
@@ -756,32 +781,43 @@ defmodule ModBoss do
     end)
   end
 
-  defp encode_value(%Mapping{} = mapping) do
-    with {module, function, args} <- get_encode_mfa(mapping),
+  defp encode_value(%Mapping{} = mapping, context) do
+    with {module, function, args} <- get_encode_mfa(mapping, context),
          {:ok, encoded} <- apply(module, function, args),
          :ok <- verify_value_count(mapping, encoded) do
       {:ok, encoded}
     end
   end
 
-  defp get_encode_mfa(%Mapping{as: {module, as}} = mapping) do
+  defp get_encode_mfa(%Mapping{as: {module, as}} = mapping, context) do
     function = String.to_atom("encode_#{as}")
 
-    if exists?(module, function, 2) do
-      metadata = ModBoss.Encoding.Metadata.from_mapping(mapping)
-      {module, function, [mapping.value, metadata]}
-    else
-      {:error,
-       "Expected #{inspect(module)}.#{function}/2 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
+    has_arity_1 = exists?(module, function, 1)
+    has_arity_2 = exists?(module, function, 2)
+
+    cond do
+      has_arity_1 and has_arity_2 ->
+        {:error, "Please define #{inspect(module)}.#{function}/1 or #{function}/2, but not both."}
+
+      has_arity_2 ->
+        metadata = ModBoss.Encoding.Metadata.from_mapping(mapping, context)
+        {module, function, [mapping.value, metadata]}
+
+      has_arity_1 ->
+        {module, function, [mapping.value]}
+
+      true ->
+        {:error,
+         "Expected #{inspect(module)}.#{function}/1 or #{function}/2 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
     end
   end
 
   @spec maybe_decode([Mapping.t()], map()) :: {:ok, [Mapping.t()]} | {:error, String.t()}
   defp maybe_decode(mappings, %{decode: false}), do: {:ok, mappings}
 
-  defp maybe_decode(mappings, %{decode: true}) do
+  defp maybe_decode(mappings, %{decode: true} = opts) do
     Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
-      case decode_value(mapping) do
+      case decode_value(mapping, opts.context) do
         {:ok, decoded_value} ->
           updated_mapping = %{mapping | value: decoded_value}
           {:cont, {:ok, [updated_mapping | acc]}}
@@ -799,20 +835,32 @@ defmodule ModBoss do
     end)
   end
 
-  defp decode_value(%Mapping{} = mapping) do
-    with {module, function, args} <- get_decode_mfa(mapping) do
+  defp decode_value(%Mapping{} = mapping, context) do
+    with {module, function, args} <- get_decode_mfa(mapping, context) do
       apply(module, function, args)
     end
   end
 
-  defp get_decode_mfa(%Mapping{as: {module, as}} = mapping) do
+  defp get_decode_mfa(%Mapping{as: {module, as}} = mapping, context) do
     function = String.to_atom("decode_#{as}")
 
-    if exists?(module, function, 1) do
-      {module, function, [mapping.encoded_value]}
-    else
-      {:error,
-       "Expected #{inspect(module)}.#{function}/1 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
+    has_arity_1 = exists?(module, function, 1)
+    has_arity_2 = exists?(module, function, 2)
+
+    cond do
+      has_arity_1 and has_arity_2 ->
+        {:error, "Please define #{inspect(module)}.#{function}/1 or #{function}/2, but not both."}
+
+      has_arity_2 ->
+        metadata = ModBoss.Encoding.Metadata.from_mapping(mapping, context)
+        {module, function, [mapping.encoded_value, metadata]}
+
+      has_arity_1 ->
+        {module, function, [mapping.encoded_value]}
+
+      true ->
+        {:error,
+         "Expected #{inspect(module)}.#{function}/1 or #{function}/2 to be defined for ModBoss mapping #{inspect(mapping.name)}."}
     end
   end
 

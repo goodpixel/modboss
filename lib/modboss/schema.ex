@@ -14,7 +14,7 @@ defmodule ModBoss.Schema do
 
   This establishes address 17 as a holding register with the name
   `:outdoor_temp`. The raw value from the register will be passed to
-  `ModBoss.Encoding.decode_signed_int/1` before being returned.
+  `ModBoss.Encoding.decode_signed_int/1` when decoding.
 
   Similarly, to set aside a **group of** registers to hold a single logical
   value, it would look like:
@@ -23,7 +23,7 @@ defmodule ModBoss.Schema do
 
   This establishes addresses 20–23 as holding registers with the name
   `:model_name`. The raw values from these registers will be passed (as a list)
-  to `ModBoss.Encoding.decode_ascii/1` before being returned.
+  to `ModBoss.Encoding.decode_ascii/1` when decoding.
 
   ## Mode
 
@@ -36,11 +36,20 @@ defmodule ModBoss.Schema do
   that you will provide functions with `encode_` or `decode_` prepended to the
   value provided by the `:as` option.
 
-  For example, if you specify `as: :on_off` for a read-only mapping, ModBoss
-  will expect that the schema module defines an `encode_on_off/2` function which
-  accepts the value to encode and `ModBoss.Encoding.Metadata` (to optionally
-  assist with encoding) and must return either `{:ok, encoded_value}` or
-  `{:error, message}`.
+  For example, if you specify `as: :on_off` for a writable mapping, ModBoss
+  will expect that the schema module defines either:
+
+  * `encode_on_off/1` — accepts the value to encode
+  * `encode_on_off/2` — accepts the value to encode and a
+    `ModBoss.Encoding.Metadata` struct
+
+  Use the 2-arity version when you need access to metadata (e.g. address count,
+  mapping name, or user-provided context). Both must return either
+  `{:ok, encoded_value}` or `{:error, message}`.
+
+  The same applies to decode functions: define either `decode_on_off/1` (accepts
+  the encoded value) or `decode_on_off/2` (accepts the encoded value and
+  metadata).
 
   If the function to be used lives outside of the current module, a tuple
   including the module name can be passed. For example, you can use built-in
@@ -82,14 +91,24 @@ defmodule ModBoss.Schema do
 
           input_register 200, :foo, as: {ModBoss.Encoding, :unsigned_int}
           coil 300, :bar, as: :on_off, mode: :rw
+          holding_register 301, :setpoint, as: :scaled, mode: :w
           discrete_input 400, :baz, as: {ModBoss.Encoding, :boolean}
         end
 
-        def encode_on_off(:on, _metadata), do: {:ok, 1}
-        def encode_on_off(:off, _metadata), do: {:ok, 0}
+        # 1-arity: no metadata needed
+        def encode_on_off(:on), do: {:ok, 1}
+        def encode_on_off(:off), do: {:ok, 0}
 
         def decode_on_off(1), do: {:ok, :on}
         def decode_on_off(0), do: {:ok, :off}
+
+        # 2-arity: uses metadata.context for runtime behavior
+        def encode_scaled(value, metadata) do
+          case metadata.context do
+            %{unit: :fahrenheit} -> {:ok, round((value - 32) * 5 / 9)}
+            _ -> {:ok, value}
+          end
+        end
       end
   """
 
@@ -219,6 +238,7 @@ defmodule ModBoss.Schema do
     end
   end
 
+  @doc false
   def validate_name!(%Macro.Env{file: file, line: line}, :all) do
     raise CompileError,
       file: file,
@@ -228,6 +248,7 @@ defmodule ModBoss.Schema do
 
   def validate_name!(_env, _name), do: :ok
 
+  @doc false
   def create_mapping(module, object_type, address_or_range, name, opts) do
     if not Module.has_attribute?(module, :modboss_mappings) do
       raise """
@@ -292,6 +313,9 @@ defmodule ModBoss.Schema do
         """
     end
 
+    validate_local_encode_functions!(env, mappings)
+    validate_local_decode_functions!(env, mappings)
+
     mappings =
       mappings
       |> Enum.reverse()
@@ -309,5 +333,75 @@ defmodule ModBoss.Schema do
 
       def __modboss_schema__, do: unquote(mappings)
     end
+  end
+
+  @doc false
+  def validate_local_encode_functions!(env, mappings) do
+    mappings
+    |> Enum.filter(fn mapping ->
+      {module, _function} = mapping.as
+      module == env.module and Mapping.writable?(mapping)
+    end)
+    |> Enum.uniq_by(fn mapping -> mapping.as end)
+    |> Enum.each(fn mapping ->
+      {_module, as} = mapping.as
+      function = String.to_atom("encode_#{as}")
+
+      has_arity_1 = Module.defines?(env.module, {function, 1})
+      has_arity_2 = Module.defines?(env.module, {function, 2})
+
+      cond do
+        has_arity_1 and has_arity_2 ->
+          raise CompileError,
+            file: env.file,
+            line: env.line,
+            description: "Please define #{function}/1 or #{function}/2, but not both."
+
+        not (has_arity_1 or has_arity_2) ->
+          raise CompileError,
+            file: env.file,
+            line: env.line,
+            description:
+              "Expected #{function}/1 or #{function}/2 to be defined for writable mapping #{inspect(mapping.name)}."
+
+        true ->
+          :ok
+      end
+    end)
+  end
+
+  @doc false
+  def validate_local_decode_functions!(env, mappings) do
+    mappings
+    |> Enum.filter(fn mapping ->
+      {module, _function} = mapping.as
+      module == env.module and Mapping.readable?(mapping)
+    end)
+    |> Enum.uniq_by(fn mapping -> mapping.as end)
+    |> Enum.each(fn mapping ->
+      {_module, as} = mapping.as
+      function = String.to_atom("decode_#{as}")
+
+      has_arity_1 = Module.defines?(env.module, {function, 1})
+      has_arity_2 = Module.defines?(env.module, {function, 2})
+
+      cond do
+        has_arity_1 and has_arity_2 ->
+          raise CompileError,
+            file: env.file,
+            line: env.line,
+            description: "Please define #{function}/1 or #{function}/2, but not both."
+
+        not (has_arity_1 or has_arity_2) ->
+          raise CompileError,
+            file: env.file,
+            line: env.line,
+            description:
+              "Expected #{function}/1 or #{function}/2 to be defined for readable mapping #{inspect(mapping.name)}."
+
+        true ->
+          :ok
+      end
+    end)
   end
 end
