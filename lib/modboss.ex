@@ -65,7 +65,8 @@ defmodule ModBoss do
       `{:error, _}` triggers a retry; exceptions are not retried.
     * `:context` — a map of arbitrary data that will be included in the
       `ModBoss.Encoding.Metadata` struct passed to decode functions (when using
-      2-arity decoders) and in telemetry event metadata. Defaults to `%{}`.
+      2-arity decoders) and in telemetry event metadata. Also passed to any
+      `:if` callbacks declared in the schema. Defaults to `%{}`.
       Useful for conditionally decoding values based on runtime information
       like firmware version or hardware revision, and for identifying which
       device or connection a request belongs to in telemetry handlers.
@@ -210,19 +211,52 @@ defmodule ModBoss do
   end
 
   defp read_mappings(module, mappings, read_func, opts) do
+    {supported, unsupported} = evaluate_unsupported(mappings, opts.context)
+
     {read_result, stats} =
-      mappings
+      supported
       |> chunk_mappings(module, :read, opts)
       |> read_chunks(module, read_func, opts)
 
     with {:ok, values} <- read_result,
-         {:ok, mappings} <- hydrate_values(mappings, values),
+         {:ok, mappings} <- hydrate_values(supported, values),
          {:ok, mappings} <- maybe_decode(mappings, opts) do
-      result = collect_results(mappings, opts)
+      result = collect_results(mappings ++ unsupported, opts)
       {result, stats}
     else
       {:error, _error} = result -> {result, stats}
     end
+  end
+
+  defp evaluate_unsupported(mappings, context) do
+    Enum.reduce(mappings, {[], []}, fn mapping, {supported, unsupported} ->
+      case mapping.supported do
+        true ->
+          {[mapping | supported], unsupported}
+
+        false ->
+          {supported, [%{mapping | value: nil} | unsupported]}
+
+        fun when is_function(fun, 1) ->
+          case fun.(context) do
+            true -> {[mapping | supported], unsupported}
+            false -> {supported, [%{mapping | value: nil} | unsupported]}
+            {false, custom_value} -> {supported, [%{mapping | value: custom_value} | unsupported]}
+            invalid -> raise_invalid_condition(mapping.name, context, invalid)
+          end
+      end
+    end)
+  end
+
+  defp raise_invalid_condition(name, context, return_value) do
+    raise """
+    Invalid return from conditional evaluation on mapping #{inspect(name)} with context: \
+    #{inspect(context)}.
+
+    Conditional mappings must return `true` for mappings that are supported for the given context \
+    and either `false` or `{false, custom_value}` for mappings that aren't supported. \
+    Got #{inspect(return_value)}.
+    """
   end
 
   defp read_chunks(chunks, module, read_func, opts) do
@@ -462,7 +496,8 @@ defmodule ModBoss do
       `{:error, _}` triggers a retry; exceptions are not retried.
     * `:context` — a map of arbitrary data that will be included in the
       `ModBoss.Encoding.Metadata` struct passed to encode functions (when using
-      2-arity encoders) and in telemetry event metadata. Defaults to `%{}`.
+      2-arity encoders) and in telemetry event metadata. Also passed to any
+      `:if` callbacks declared in the schema. Defaults to `%{}`.
       Useful for conditionally encoding values based on runtime information
       like firmware version or hardware revision, and for identifying which
       device or connection a request belongs to in telemetry handlers.
@@ -569,6 +604,7 @@ defmodule ModBoss do
   end
 
   defp write_mappings(module, mappings, write_func, opts) do
+    {mappings, unsupported} = Enum.split_with(mappings, &Mapping.supported?(&1, opts.context))
     initial_stats = %{objects: 0, batches: 0, total_attempts: 0}
 
     mappings

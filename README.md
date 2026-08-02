@@ -133,6 +133,12 @@ same object mappings as your physical devices (e.g. using an Elixir Agent to hol
 the modbus objects in a map). And it makes for **easier troubleshooting** since you don't need to
 memorize (or look up) the object mappings when you're at an `iex` prompt.
 
+## Conditional support
+
+Some mappings may only be available on devices running a specific model or
+firmware version. ModBoss allows conditional support of mappings at runtime
+via a callback function. See the `:if` option on mappings in `ModBoss.Schema`.
+
 ## Gap tolerance
 
 ModBoss automatically batches contiguous addresses into a single Modbus request.

@@ -311,6 +311,50 @@ defmodule ModBoss.SchemaTest do
                      """)
                    end
     end
+
+    test "raises a compile error for bogus `:if` options" do
+      assert_raise CompileError, ~r/Invalid `:if` value/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema
+
+          schema do
+            holding_register 1, :foo, if: :foo
+          end
+        end
+        """)
+      end
+    end
+
+    test "raises a compile error for captured `:if` callback that's not arity 1" do
+      assert_raise CompileError, ~r/must be arity 1/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema
+
+          schema do
+            holding_register 1, :foo, if: &supported?/2
+          end
+
+          def supported?(_, _), :true
+        end
+        """)
+      end
+    end
+
+    test "raises a compile error for anonymous `:if` callback that's not arity 1" do
+      assert_raise CompileError, ~r/must be arity 1/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema
+
+          schema do
+            holding_register 1, :foo, if: fn _, _ -> false end
+          end
+        end
+        """)
+      end
+    end
   end
 
   defp unique_module do

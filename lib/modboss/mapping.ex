@@ -14,6 +14,7 @@ defmodule ModBoss.Mapping do
           starting_address: address(),
           address_count: count(),
           as: atom() | {module(), atom()},
+          supported: boolean() | (map() -> boolean() | {false, any()}),
           value: any(),
           encoded_value: integer() | [integer()],
           mode: :r | :rw | :w,
@@ -26,6 +27,7 @@ defmodule ModBoss.Mapping do
     :starting_address,
     :address_count,
     :as,
+    :supported,
     :value,
     :encoded_value,
     :mode,
@@ -160,4 +162,11 @@ defmodule ModBoss.Mapping do
   @write_modes [:w, :rw]
   @doc false
   def writable?(%__MODULE__{} = mapping), do: mapping.mode in @write_modes
+
+  def supported?(%__MODULE__{supported: true}, _context), do: true
+  def supported?(%__MODULE__{supported: false}, _context), do: false
+
+  def supported?(%__MODULE__{supported: fun}, %{} = context) when is_function(fun, 1) do
+    fun.(context) == true
+  end
 end
