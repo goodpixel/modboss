@@ -83,6 +83,67 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
     end
 
+    test "gap tolerance does not read across unsupported conditional mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :middle, if: fn ctx -> ctx.has_middle end
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 11, {:holding_register, 3} => 33})
+
+      # When :middle is unsupported, it should NOT be gap-safe — requires 2 reads
+      {:ok, %{foo: 11, baz: 33}} =
+        ModBoss.read(schema, [:foo, :baz], read_func(device),
+          max_gap: 10,
+          context: %{has_middle: false}
+        )
+
+      assert 2 = get_read_count(device)
+    end
+
+    test "gap tolerance reads across supported conditional mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :middle, if: fn ctx -> ctx.has_middle end
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 11,
+        {:holding_register, 2} => 22,
+        {:holding_register, 3} => 33
+      })
+
+      # When :middle is supported, it IS gap-safe — single batched read
+      {:ok, %{foo: 11, baz: 33}} =
+        ModBoss.read(schema, [:foo, :baz], read_func(device),
+          max_gap: 10,
+          context: %{has_middle: true}
+        )
+
+      assert 1 = get_read_count(device)
+    end
+
     test "reads an individual mapping by name, returning a single result" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       encode_and_set(device, FakeSchema, foo: 123)

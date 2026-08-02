@@ -694,7 +694,7 @@ defmodule ModBoss do
 
     gap_safe_addresses =
       if mode == :read and Enum.any?(opts.max_gap, fn {_, size} -> size > 0 end) do
-        gap_safe_addresses(module)
+        gap_safe_addresses(module, opts.context)
       else
         MapSet.new()
       end
@@ -750,10 +750,10 @@ defmodule ModBoss do
       allow_gap?(gap, current_mapping, gap_safe_addresses, opts)
   end
 
-  defp gap_safe_addresses(module) do
+  defp gap_safe_addresses(module, context) do
     module.__modboss_schema__()
     |> Map.values()
-    |> Enum.filter(& &1.gap_safe)
+    |> Enum.filter(&(&1.gap_safe and Mapping.supported?(&1, context)))
     |> Enum.flat_map(fn mapping ->
       mapping |> Mapping.address_range() |> Enum.map(&{mapping.type, &1})
     end)

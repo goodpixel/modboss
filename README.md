@@ -148,6 +148,9 @@ fewer network round trips. See `ModBoss.read/4` for details, and the `:gap_safe`
 option in `ModBoss.Schema` for controlling which mappings are safe to read
 incidentally.
 
+_Note that unsupported mappings (as determined by the `:if` callback at
+runtime) are not considered gap safe._
+
 ## Telemetry
 
 ModBoss optionally emits [`:telemetry`](https://hex.pm/packages/telemetry) events for
