@@ -199,7 +199,11 @@ defmodule ModBoss do
           total_attempts: stats.total_attempts
         }
 
-        stop_metadata = Map.put(start_metadata, :result, result)
+        stop_metadata =
+          start_metadata
+          |> Map.put(:result, result)
+          |> Map.put(:unsupported, stats.unsupported)
+
         {result, stop_measurements, stop_metadata}
       end)
     end
@@ -217,6 +221,8 @@ defmodule ModBoss do
       supported
       |> chunk_mappings(module, :read, opts)
       |> read_chunks(module, read_func, opts)
+
+    stats = Map.put(stats, :unsupported, Enum.map(unsupported, & &1.name))
 
     with {:ok, values} <- read_result,
          {:ok, mappings} <- hydrate_values(supported, values),
@@ -592,7 +598,11 @@ defmodule ModBoss do
           total_attempts: stats.total_attempts
         }
 
-        stop_metadata = Map.put(start_metadata, :result, result)
+        stop_metadata =
+          start_metadata
+          |> Map.put(:result, result)
+          |> Map.put(:unsupported, stats.unsupported)
+
         {result, stop_measurements, stop_metadata}
       end)
     end
@@ -605,7 +615,13 @@ defmodule ModBoss do
 
   defp write_mappings(module, mappings, write_func, opts) do
     {mappings, unsupported} = Enum.split_with(mappings, &Mapping.supported?(&1, opts.context))
-    initial_stats = %{objects: 0, batches: 0, total_attempts: 0}
+
+    initial_stats = %{
+      objects: 0,
+      batches: 0,
+      total_attempts: 0,
+      unsupported: Enum.map(unsupported, & &1.name)
+    }
 
     mappings
     |> chunk_mappings(module, :write, opts)
@@ -626,9 +642,10 @@ defmodule ModBoss do
       {result, attempts} = wrapped_write.(first.type, first.starting_address, value_or_values)
 
       updated_stats = %{
-        objects: stats.objects + address_count,
-        batches: stats.batches + 1,
-        total_attempts: stats.total_attempts + attempts
+        stats
+        | objects: stats.objects + address_count,
+          batches: stats.batches + 1,
+          total_attempts: stats.total_attempts + attempts
       }
 
       case result do

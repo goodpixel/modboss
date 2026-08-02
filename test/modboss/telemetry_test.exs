@@ -477,6 +477,31 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, cb_stop_metadata}
       assert cb_stop_metadata.context == %{}
     end
+
+    test "includes unsupported mapping names in stop metadata", %{device: device} do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :always
+          holding_register 2, :conditional, if: fn ctx -> ctx.supported end
+        end
+      end
+      """)
+
+      set_objects(device, %{{:holding_register, 1} => 42})
+
+      {:ok, _} =
+        ModBoss.read(schema, [:always, :conditional], read_func(device),
+          context: %{supported: false}
+        )
+
+      assert_receive {:telemetry, [:modboss, :read, :stop], _, stop_metadata}
+      assert stop_metadata.unsupported == [:conditional]
+    end
   end
 
   describe "write/3 telemetry" do
@@ -741,6 +766,29 @@ defmodule ModBoss.TelemetryTest do
 
       assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, cb_stop_metadata}
       assert cb_stop_metadata.context == %{}
+    end
+
+    test "includes unsupported mapping names in stop metadata", %{device: device} do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :always, mode: :w
+          holding_register 2, :conditional, mode: :w, if: fn ctx -> ctx.supported end
+        end
+      end
+      """)
+
+      :ok =
+        ModBoss.write(schema, %{always: 1, conditional: 99}, write_func(device),
+          context: %{supported: false}
+        )
+
+      assert_receive {:telemetry, [:modboss, :write, :stop], _, stop_metadata}
+      assert stop_metadata.unsupported == [:conditional]
     end
   end
 
