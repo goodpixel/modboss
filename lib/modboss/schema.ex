@@ -160,9 +160,10 @@ defmodule ModBoss.Schema do
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
-  * `:if` — Accepts a callback function for conditionally determining at runtime whether the
-    mapping is supported. The callback receives any `:context` map provided to `ModBoss.read/4`
-    or `ModBoss.write/4` and must return `true` for supported or `false` or
+  * `:if` — Conditionally determines at runtime whether the mapping is supported.
+    Accepts an anonymous function, an atom referencing a function on the schema module, or a
+    `{Module, :function}` tuple. The callback receives any `:context` map provided to
+    `ModBoss.read/4` or `ModBoss.write/4` and must return `true` for supported or `false` or
     `{false, custom_value}` for unsupported. Unsupported mappings are neither requested nor
     encoded/decoded. When attempted to be read, they will simply return `nil` or the custom
     value as specified.
@@ -182,11 +183,12 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
-  * `:if` — Accepts a callback function for conditionally determining at runtime whether the
-    mapping is supported. The callback receives any `:context` map provided to `ModBoss.read/4`
-    or `ModBoss.write/4` and must return `true` for supported or `false` or
+  * `:if` — Conditionally determines at runtime whether the mapping is supported.
+    Accepts an anonymous function, an atom referencing a function on the schema module, or a
+    `{Module, :function}` tuple. The callback receives any `:context` map provided to
+    `ModBoss.read/4` and must return `true` for supported or `false` or
     `{false, custom_value}` for unsupported. Unsupported mappings are neither requested nor
-    encoded/decoded. When attempted to be read, they will simply return `nil` or the custom
+    decoded. When attempted to be read, they will simply return `nil` or the custom
     value as specified.
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true`). You should
@@ -205,9 +207,10 @@ defmodule ModBoss.Schema do
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
-  * `:if` — Accepts a callback function for conditionally determining at runtime whether the
-    mapping is supported. The callback receives any `:context` map provided to `ModBoss.read/4`
-    or `ModBoss.write/4` and must return `true` for supported or `false` or
+  * `:if` — Conditionally determines at runtime whether the mapping is supported.
+    Accepts an anonymous function, an atom referencing a function on the schema module, or a
+    `{Module, :function}` tuple. The callback receives any `:context` map provided to
+    `ModBoss.read/4` or `ModBoss.write/4` and must return `true` for supported or `false` or
     `{false, custom_value}` for unsupported. Unsupported mappings are neither requested nor
     encoded/decoded. When attempted to be read, they will simply return `nil` or the custom
     value as specified.
@@ -227,11 +230,12 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
-  * `:if` — Accepts a callback function for conditionally determining at runtime whether the
-    mapping is supported. The callback receives any `:context` map provided to `ModBoss.read/4`
-    or `ModBoss.write/4` and must return `true` for supported or `false` or
+  * `:if` — Conditionally determines at runtime whether the mapping is supported.
+    Accepts an anonymous function, an atom referencing a function on the schema module, or a
+    `{Module, :function}` tuple. The callback receives any `:context` map provided to
+    `ModBoss.read/4` and must return `true` for supported or `false` or
     `{false, custom_value}` for unsupported. Unsupported mappings are neither requested nor
-    encoded/decoded. When attempted to be read, they will simply return `nil` or the custom
+    decoded. When attempted to be read, they will simply return `nil` or the custom
     value as specified.
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true`). You should
@@ -277,28 +281,28 @@ defmodule ModBoss.Schema do
 
   def validate_name!(_env, _name), do: :ok
 
-  defp validate_if_ast!(_env, _name, true), do: :ok
-  defp validate_if_ast!(_env, _name, false), do: :ok
-
-  defp validate_if_ast!(_env, _name, {:&, _, [{:/, _, [_, 1]}]}), do: :ok
-
-  defp validate_if_ast!(env, name, {:&, _, [{:/, _, [_, _arity]}]}) do
-    raise CompileError,
-      file: env.file,
-      line: env.line,
-      description: "Captured `:if` callback for #{inspect(name)} mapping must be arity 1."
-  end
-
-  defp validate_if_ast!(_env, _name, {:fn, _, [{:->, _, [[_single_arg], _body]}]}), do: :ok
-
-  defp validate_if_ast!(env, name, {:fn, _, [{:->, _, [_multiple_args, _body]}]}) do
+  defp validate_if_ast!(env, name, {:fn, _, [{:->, _, [args, _body]}]}) when length(args) != 1 do
     raise CompileError,
       file: env.file,
       line: env.line,
       description: "Anonymous `:if` callback for #{inspect(name)} mapping must be arity 1."
   end
 
-  defp validate_if_ast!(env, name, _) do
+  defp validate_if_ast!(_env, _name, _), do: :ok
+
+  defp to_supported_ast(true, _env, _name), do: true
+  defp to_supported_ast(false, _env, _name), do: false
+  defp to_supported_ast({:fn, _, _} = fn_ast, _env, _name), do: fn_ast
+
+  defp to_supported_ast(fun_name, env, _name) when is_atom(fun_name) do
+    quote do: &(unquote(env.module).unquote(fun_name) / 1)
+  end
+
+  defp to_supported_ast({mod_ast, fun_name}, _env, _name) when is_atom(fun_name) do
+    quote do: &(unquote(mod_ast).unquote(fun_name) / 1)
+  end
+
+  defp to_supported_ast(_invalid, env, name) do
     raise CompileError,
       file: env.file,
       line: env.line,
@@ -372,6 +376,7 @@ defmodule ModBoss.Schema do
 
     validate_local_encode_functions!(env, mappings)
     validate_local_decode_functions!(env, mappings)
+    validate_local_if_functions!(env)
 
     escaped_mappings =
       mappings
@@ -383,12 +388,11 @@ defmodule ModBoss.Schema do
       env.module
       |> Module.get_attribute(:modboss_mapping_support)
       |> Enum.reduce(escaped_mappings, fn {mapping_name, if_ast}, acc ->
+        supported_ast = to_supported_ast(if_ast, env, mapping_name)
+
         quote do
-          # Reincorporate any raw `:if` conditions into the Mapping struct.
-          # Captured private functions and anonymous functions aren't compatible with
-          # `Macro.escape`, hence the need to have removed the `if_ast` and reinject it here.
           Map.update!(unquote(acc), unquote(mapping_name), fn mapping ->
-            %{mapping | supported: unquote(if_ast)}
+            %{mapping | supported: unquote(supported_ast)}
           end)
         end
       end)
@@ -476,6 +480,24 @@ defmodule ModBoss.Schema do
         true ->
           :ok
       end
+    end)
+  end
+
+  defp validate_local_if_functions!(env) do
+    env.module
+    |> Module.get_attribute(:modboss_mapping_support)
+    |> Enum.each(fn
+      {name, fun_name} when is_atom(fun_name) and fun_name not in [true, false] ->
+        unless Module.defines?(env.module, {fun_name, 1}) do
+          raise CompileError,
+            file: env.file,
+            line: env.line,
+            description:
+              "Expected #{fun_name}/1 to be defined for `:if` callback on mapping #{inspect(name)}."
+        end
+
+      _ ->
+        :ok
     end)
   end
 end

@@ -2,6 +2,9 @@ defmodule ModBossTest do
   use ExUnit.Case, async: true
   import ModBoss.CallbackHelpers
 
+  @readable_types [:holding_register, :input_register, :coil, :discrete_input]
+  @writeable_types [:holding_register, :coil]
+
   defmodule FakeSchema do
     use ModBoss.Schema
 
@@ -171,252 +174,106 @@ defmodule ModBossTest do
                ModBoss.read(FakeSchema, [:foobar, :bazqux], read_func(device))
     end
 
-    test "allows conditional reads of mappings based on the `:if` opt" do
-      schema = unique_module()
+    Enum.each(@readable_types, fn object_type ->
+      test "allows conditional reads of #{object_type} mappings based on the `:if` opt" do
+        schema = unique_module()
 
-      Code.compile_string("""
-      defmodule #{schema} do
-        use ModBoss.Schema
+        Code.compile_string("""
+        defmodule #{schema} do
+          use ModBoss.Schema
 
-        schema do
-          holding_register 1, :hr_1
-          holding_register 2, :hr_2, if: &__MODULE__.supported?/1
-          holding_register 3, :hr_3
+          schema do
+            #{unquote(object_type)} 1, :foo
+            #{unquote(object_type)} 2, :bar, if: :supported?
+            #{unquote(object_type)} 3, :baz
+          end
 
-          input_register 1, :ir_1
-          input_register 2, :ir_2, if: &__MODULE__.supported?/1
-          input_register 3, :ir_3
-
-          coil 1, :c_1
-          coil 2, :c_2, if: &__MODULE__.supported?/1
-          coil 3, :c_3
-
-          discrete_input 1, :di_1
-          discrete_input 2, :di_2, if: &__MODULE__.supported?/1
-          discrete_input 3, :di_3
+          def supported?(%{include_bar: true}), do: true
+          def supported?(%{include_bar: false}), do: false
         end
+        """)
 
-        def supported?(%{include_bar: true}), do: true
-        def supported?(%{include_bar: false}), do: false
+        device = start_supervised!({Agent, fn -> @initial_state end})
+
+        set_objects(device, %{
+          {unquote(object_type), 1} => 1,
+          {unquote(object_type), 2} => 0,
+          {unquote(object_type), 3} => 1
+        })
+
+        # With condition evaluating to true…
+        assert {:ok, %{foo: 1, bar: 0, baz: 1}} =
+                 ModBoss.read(
+                   schema,
+                   [:foo, :bar, :baz],
+                   read_func(device),
+                   context: %{include_bar: true}
+                 )
+
+        # …executes 1 batched read since the supported registers are contiguous.
+        assert 1 = get_read_count(device)
+
+        # With condition func evaluating to false…
+        assert {:ok, %{foo: 1, bar: nil, baz: 1}} =
+                 ModBoss.read(
+                   schema,
+                   [:foo, :bar, :baz],
+                   read_func(device),
+                   context: %{include_bar: false}
+                 )
+
+        # …executes 2 distinct reads since the supported registers are NOT contiguous.
+        assert 2 = get_read_count(device)
       end
-      """)
+    end)
 
-      device = start_supervised!({Agent, fn -> @initial_state end})
+    Enum.each(@readable_types, fn object_type ->
+      test "supports various callback formats for conditional #{object_type} mappings" do
+        schema = unique_module()
 
-      set_objects(device, %{
-        {:holding_register, 1} => 10,
-        {:holding_register, 2} => 20,
-        {:holding_register, 3} => 30,
-        {:input_register, 1} => 10,
-        {:input_register, 2} => 20,
-        {:input_register, 3} => 30,
-        {:coil, 1} => 10,
-        {:coil, 2} => 20,
-        {:coil, 3} => 30,
-        {:discrete_input, 1} => 10,
-        {:discrete_input, 2} => 20,
-        {:discrete_input, 3} => 30
-      })
+        Code.compile_string("""
+        defmodule #{schema} do
+          use ModBoss.Schema
 
-      # With condition evaluating to true…
-      assert {:ok,
-              %{
-                hr_1: 10,
-                hr_2: 20,
-                hr_3: 30,
-                ir_1: 10,
-                ir_2: 20,
-                ir_3: 30,
-                c_1: 10,
-                c_2: 20,
-                c_3: 30,
-                di_1: 10,
-                di_2: 20,
-                di_3: 30
-              }} =
-               ModBoss.read(
-                 schema,
-                 [
-                   :hr_1,
-                   :hr_2,
-                   :hr_3,
-                   :ir_1,
-                   :ir_2,
-                   :ir_3,
-                   :c_1,
-                   :c_2,
-                   :c_3,
-                   :di_1,
-                   :di_2,
-                   :di_3
-                 ],
-                 read_func(device),
-                 context: %{include_bar: true}
-               )
+          schema do
+            #{unquote(object_type)} 1, :mod_fun, if: {__MODULE__, :supported?}
+            #{unquote(object_type)} 2, :fun, if: :supported?
+            #{unquote(object_type)} 3, :anon, if: fn ctx -> Version.compare(ctx.version, "2.0.0") in [:gt, :eq] end
+          end
 
-      # …executes 4 batched reads for 4 sets of 3 contiguous registers.
-      assert 4 = get_read_count(device)
-
-      # With condition func evaluating to false…
-      assert {:ok,
-              %{
-                hr_1: 10,
-                hr_2: nil,
-                hr_3: 30,
-                ir_1: 10,
-                ir_2: nil,
-                ir_3: 30,
-                c_1: 10,
-                c_2: nil,
-                c_3: 30,
-                di_1: 10,
-                di_2: nil,
-                di_3: 30
-              }} =
-               ModBoss.read(
-                 schema,
-                 [
-                   :hr_1,
-                   :hr_2,
-                   :hr_3,
-                   :ir_1,
-                   :ir_2,
-                   :ir_3,
-                   :c_1,
-                   :c_2,
-                   :c_3,
-                   :di_1,
-                   :di_2,
-                   :di_3
-                 ],
-                 read_func(device),
-                 context: %{include_bar: false}
-               )
-
-      # …executes 8 distinct reads since none of the supported registers are contiguous.
-      assert 8 = get_read_count(device)
-    end
-
-    test "supports various callback formats for conditional mappings" do
-      schema = unique_module()
-
-      Code.compile_string("""
-      defmodule #{schema} do
-        use ModBoss.Schema
-
-        schema do
-          holding_register 1, :hr_1, if: &__MODULE__.supported?/1
-          holding_register 2, :hr_2, if: &supported?/1
-          holding_register 3, :hr_3, if: fn ctx -> Version.compare(ctx.version, "2.0.0") in [:gt, :eq] end
-
-          input_register 1, :ir_1, if: &__MODULE__.supported?/1
-          input_register 2, :ir_2, if: &supported?/1
-          input_register 3, :ir_3, if: fn ctx -> Version.compare(ctx.version, "2.0.0") in [:gt, :eq] end
-
-          coil 1, :c_1, if: &__MODULE__.supported?/1
-          coil 2, :c_2, if: &supported?/1
-          coil 3, :c_3, if: fn ctx -> Version.compare(ctx.version, "2.0.0") in [:gt, :eq] end
-
-          discrete_input 1, :di_1, if: &__MODULE__.supported?/1
-          discrete_input 2, :di_2, if: &supported?/1
-          discrete_input 3, :di_3, if: fn ctx -> Version.compare(ctx.version, "2.0.0") in [:gt, :eq] end
+          def supported?(ctx) do
+            Version.compare(ctx.version, "2.0.0") in [:gt, :eq]
+          end
         end
+        """)
 
-        def supported?(ctx) do
-          Version.compare(ctx.version, "2.0.0") in [:gt, :eq]
-        end
+        device = start_supervised!({Agent, fn -> @initial_state end})
+
+        set_objects(device, %{
+          {unquote(object_type), 1} => 1,
+          {unquote(object_type), 2} => 0,
+          {unquote(object_type), 3} => 1
+        })
+
+        # With condition evaluating to true…
+        assert {:ok, %{mod_fun: 1, fun: 0, anon: 1}} =
+                 ModBoss.read(
+                   schema,
+                   [:mod_fun, :fun, :anon],
+                   read_func(device),
+                   context: %{version: "2.0.0"}
+                 )
+
+        # With condition func evaluating to false…
+        assert {:ok, %{mod_fun: nil, fun: nil, anon: nil}} =
+                 ModBoss.read(
+                   schema,
+                   [:mod_fun, :fun, :anon],
+                   read_func(device),
+                   context: %{version: "1.9.9"}
+                 )
       end
-      """)
-
-      device = start_supervised!({Agent, fn -> @initial_state end})
-
-      set_objects(device, %{
-        {:holding_register, 1} => 10,
-        {:holding_register, 2} => 20,
-        {:holding_register, 3} => 30,
-        {:input_register, 1} => 10,
-        {:input_register, 2} => 20,
-        {:input_register, 3} => 30,
-        {:coil, 1} => 10,
-        {:coil, 2} => 20,
-        {:coil, 3} => 30,
-        {:discrete_input, 1} => 10,
-        {:discrete_input, 2} => 20,
-        {:discrete_input, 3} => 30
-      })
-
-      # With condition evaluating to true…
-      assert {:ok,
-              %{
-                hr_1: 10,
-                hr_2: 20,
-                hr_3: 30,
-                ir_1: 10,
-                ir_2: 20,
-                ir_3: 30,
-                c_1: 10,
-                c_2: 20,
-                c_3: 30,
-                di_1: 10,
-                di_2: 20,
-                di_3: 30
-              }} =
-               ModBoss.read(
-                 schema,
-                 [
-                   :hr_1,
-                   :hr_2,
-                   :hr_3,
-                   :ir_1,
-                   :ir_2,
-                   :ir_3,
-                   :c_1,
-                   :c_2,
-                   :c_3,
-                   :di_1,
-                   :di_2,
-                   :di_3
-                 ],
-                 read_func(device),
-                 context: %{version: "2.0.0"}
-               )
-
-      # With condition func evaluating to false…
-      assert {:ok,
-              %{
-                hr_1: nil,
-                hr_2: nil,
-                hr_3: nil,
-                ir_1: nil,
-                ir_2: nil,
-                ir_3: nil,
-                c_1: nil,
-                c_2: nil,
-                c_3: nil,
-                di_1: nil,
-                di_2: nil,
-                di_3: nil
-              }} =
-               ModBoss.read(
-                 schema,
-                 [
-                   :hr_1,
-                   :hr_2,
-                   :hr_3,
-                   :ir_1,
-                   :ir_2,
-                   :ir_3,
-                   :c_1,
-                   :c_2,
-                   :c_3,
-                   :di_1,
-                   :di_2,
-                   :di_3
-                 ],
-                 read_func(device),
-                 context: %{version: "1.9.9"}
-               )
-    end
+    end)
 
     test "optionally returns custom response for unsupported mappings" do
       schema = unique_module()
@@ -427,7 +284,7 @@ defmodule ModBossTest do
 
         schema do
           holding_register 1, :foo
-          holding_register 2, :bar, if: &__MODULE__.supported?/1
+          holding_register 2, :bar, if: :supported?
           holding_register 3, :baz
         end
 
