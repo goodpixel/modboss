@@ -1660,6 +1660,37 @@ defmodule ModBossTest do
       assert %{{:holding_register, 1} => 3, {:holding_register, 2} => 4} = get_objects(device)
     end
 
+    test "does not encode values for unsupported conditional mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :always_writable, mode: :w
+          holding_register 2, :conditional, mode: :w, as: :scaled, if: fn ctx -> ctx.supported end
+        end
+
+        def encode_scaled(value, _metadata) when is_number(value), do: {:ok, value * 10}
+        def encode_scaled(_value, _metadata), do: {:error, "must be a number"}
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert :ok =
+               ModBoss.write(
+                 schema,
+                 %{always_writable: 1, conditional: :invalid_value},
+                 write_func(device),
+                 context: %{supported: false}
+               )
+
+      assert %{{:holding_register, 1} => 1} = get_objects(device)
+      refute Map.has_key?(get_objects(device), {:holding_register, 2})
+    end
+
     test "writes named mappings that span more than one address" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       :ok = ModBoss.write(FakeSchema, %{qux: [0, 10, 20], quux: [-1, -2]}, write_func(device))

@@ -527,13 +527,18 @@ defmodule ModBoss do
 
     with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values),
-         {:ok, mappings} <- encode_mappings(mappings, opts.context) do
-      do_writes(module, names, mappings, write_func, opts)
+         {supported, unsupported} <- split_unsupported(mappings, opts.context),
+         {:ok, supported} <- encode_mappings(supported, opts.context) do
+      do_writes(module, names, supported, unsupported, write_func, opts)
     end
   end
 
   defp get_keys(params) when is_map(params), do: Map.keys(params)
   defp get_keys(params) when is_list(params), do: Keyword.keys(params)
+
+  defp split_unsupported(mappings, context) do
+    Enum.split_with(mappings, &Mapping.supported?(&1, context))
+  end
 
   @default_write_opts %{max_attempts: 1, context: %{}}
 
@@ -587,7 +592,7 @@ defmodule ModBoss do
   defp unwritable(mappings), do: Enum.reject(mappings, &Mapping.writable?/1)
 
   if Code.ensure_loaded?(:telemetry) do
-    defp do_writes(module, names, mappings, write_func, opts) do
+    defp do_writes(module, names, mappings, unsupported, write_func, opts) do
       start_metadata = %{schema: module, names: names, context: opts.context}
 
       :telemetry.span([:modboss, :write], start_metadata, fn ->
@@ -601,27 +606,24 @@ defmodule ModBoss do
 
         stop_metadata =
           start_metadata
+          |> Map.put(:unsupported, Enum.map(unsupported, & &1.name))
           |> Map.put(:result, result)
-          |> Map.put(:unsupported, stats.unsupported)
 
         {result, stop_measurements, stop_metadata}
       end)
     end
   else
-    defp do_writes(module, _names, mappings, write_func, opts) do
+    defp do_writes(module, _names, mappings, _unsupported, write_func, opts) do
       {result, _} = write_mappings(module, mappings, write_func, opts)
       result
     end
   end
 
   defp write_mappings(module, mappings, write_func, opts) do
-    {mappings, unsupported} = Enum.split_with(mappings, &Mapping.supported?(&1, opts.context))
-
     initial_stats = %{
       objects: 0,
       batches: 0,
-      total_attempts: 0,
-      unsupported: Enum.map(unsupported, & &1.name)
+      total_attempts: 0
     }
 
     mappings
