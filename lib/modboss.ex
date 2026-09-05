@@ -237,33 +237,12 @@ defmodule ModBoss do
 
   defp evaluate_unsupported(mappings, context) do
     Enum.reduce(mappings, {[], []}, fn mapping, {supported, unsupported} ->
-      case mapping.supported do
-        true ->
-          {[mapping | supported], unsupported}
-
-        false ->
-          {supported, [%{mapping | value: nil} | unsupported]}
-
-        fun when is_function(fun, 1) ->
-          case fun.(context) do
-            true -> {[mapping | supported], unsupported}
-            false -> {supported, [%{mapping | value: nil} | unsupported]}
-            {false, custom_value} -> {supported, [%{mapping | value: custom_value} | unsupported]}
-            invalid -> raise_invalid_condition(mapping.name, context, invalid)
-          end
+      case Mapping.evaluate_support(mapping, context) do
+        true -> {[mapping | supported], unsupported}
+        false -> {supported, [%{mapping | value: nil} | unsupported]}
+        {false, custom_value} -> {supported, [%{mapping | value: custom_value} | unsupported]}
       end
     end)
-  end
-
-  defp raise_invalid_condition(name, context, return_value) do
-    raise """
-    Invalid return from conditional evaluation on mapping #{inspect(name)} with context: \
-    #{inspect(context)}.
-
-    Conditional mappings must return `true` for mappings that are supported for the given context \
-    and either `false` or `{false, custom_value}` for mappings that aren't supported. \
-    Got #{inspect(return_value)}.
-    """
   end
 
   defp read_chunks(chunks, module, read_func, opts) do

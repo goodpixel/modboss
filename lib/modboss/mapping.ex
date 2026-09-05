@@ -163,10 +163,35 @@ defmodule ModBoss.Mapping do
   @doc false
   def writable?(%__MODULE__{} = mapping), do: mapping.mode in @write_modes
 
-  def supported?(%__MODULE__{supported: true}, _context), do: true
-  def supported?(%__MODULE__{supported: false}, _context), do: false
+  @doc """
+  Evaluates whether or not the `mapping` is supported given the `context`
+  """
+  def supported?(%__MODULE__{} = mapping, %{} = context) do
+    evaluate_support(mapping, context) == true
+  end
 
-  def supported?(%__MODULE__{supported: fun}, %{} = context) when is_function(fun, 1) do
-    fun.(context) == true
+  @doc false
+  def evaluate_support(%__MODULE__{supported: true}, _context), do: true
+  def evaluate_support(%__MODULE__{supported: false}, _context), do: false
+
+  def evaluate_support(%__MODULE__{supported: fun, name: name}, %{} = context)
+      when is_function(fun, 1) do
+    case fun.(context) do
+      true -> true
+      false -> false
+      {false, custom_value} -> {false, custom_value}
+      invalid -> raise_invalid_condition(name, context, invalid)
+    end
+  end
+
+  defp raise_invalid_condition(name, context, return_value) do
+    raise """
+    Invalid return from conditional evaluation on mapping #{inspect(name)} with context: \
+    #{inspect(context)}.
+
+    Conditional mappings must return `true` for mappings that are supported for the given context \
+    and either `false` or `{false, custom_value}` for mappings that aren't supported. \
+    Got #{inspect(return_value)}.
+    """
   end
 end

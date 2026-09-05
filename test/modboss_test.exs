@@ -320,6 +320,26 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
     end
 
+    test "raises when a conditional mapping's `:if` callback returns an invalid value" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :conditional, if: fn _ -> :maybe end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, ~r/Invalid return from conditional evaluation/, fn ->
+        ModBoss.read(schema, [:conditional], read_func(device), context: %{})
+      end
+    end
+
     test "refuses to read unless all mappings are declared readable" do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
@@ -1658,6 +1678,53 @@ defmodule ModBossTest do
                )
 
       assert %{{:holding_register, 1} => 3, {:holding_register, 2} => 4} = get_objects(device)
+    end
+
+    test "raises when a conditional write mapping's `:if` callback returns an invalid value" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 2, :conditional, mode: :w, if: fn _ -> :maybe end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, ~r/Invalid return from conditional evaluation/, fn ->
+        ModBoss.write(schema, %{conditional: 4}, write_func(device), context: %{})
+      end
+    end
+
+    test "treats `{false, custom_value}` as unsupported for conditional write mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :always_writable, mode: :w
+          holding_register 2, :conditional, mode: :w, if: fn _ -> {false, :custom_value} end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert :ok =
+               ModBoss.write(
+                 schema,
+                 %{always_writable: 1, conditional: 2},
+                 write_func(device)
+               )
+
+      assert %{{:holding_register, 1} => 1} = get_objects(device)
+      refute Map.has_key?(get_objects(device), {:holding_register, 2})
     end
 
     test "does not encode values for unsupported conditional mappings" do
