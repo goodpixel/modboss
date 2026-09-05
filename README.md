@@ -133,23 +133,18 @@ same object mappings as your physical devices (e.g. using an Elixir Agent to hol
 the modbus objects in a map). And it makes for **easier troubleshooting** since you don't need to
 memorize (or look up) the object mappings when you're at an `iex` prompt.
 
-## Conditional support
+## Conditional mapping support
 
 Some mappings may only be available on devices running a specific model or
 firmware version. ModBoss allows conditional support of mappings at runtime
-via a callback function. See the `:if` option on mappings in `ModBoss.Schema`.
+via a callback function. See `ModBoss.Schema`.
 
 ## Gap tolerance
 
 ModBoss automatically batches contiguous addresses into a single Modbus request.
 The `:max_gap` option on `ModBoss.read/4` lets you go further by bridging small
 gaps between requested mappings—trading a few extra (discarded) addresses for
-fewer network round trips. See `ModBoss.read/4` for details, and the `:gap_safe`
-option in `ModBoss.Schema` for controlling which mappings are safe to read
-incidentally.
-
-_Note that unsupported mappings (as determined by the `:if` callback at
-runtime) are not considered gap safe._
+fewer network round trips.
 
 ## Telemetry
 

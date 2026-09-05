@@ -79,7 +79,29 @@ defmodule ModBoss.Schema do
   > (e.g. in `ModBoss.Encoding.decode_ascii/1`), the decode function will be
   > passed a **List** of values.
 
-  ## Example
+  ## Conditional mapping support
+
+  Some mappings may only be available under specific circumstances, like when
+  running a particular firmware version. ModBoss allows conditional support of
+  mappings at runtime via the `:if` option.
+
+  `:if` accepts an anonymous function, an atom referencing a function on the
+  schema module, or a `{Module, :function}` tuple. The callback receives any
+  `:context` provided to `ModBoss.read/4` or `ModBoss.write/4` and must return
+  `true` for supported or `false` or `{false, custom_value}` for unsupported
+  (custom return values are only supported on reads). Unsupported mappings are
+  neither requested nor encoded/decoded. When attempted to be read, they will
+  simply return `nil` or the custom value as specified.
+
+  > #### Gap safety {: .info}
+  >
+  > Conditional mappings determined to be **unsupported** for the given context
+  > are considered gap _unsafe_.
+
+  `ModBoss.Telemetry` exposes an `:unsupported` metric to track which mappings were
+  excluded from any given read or write.
+
+  ## Examples
 
       defmodule MyDevice.Schema do
         use ModBoss.Schema
@@ -87,22 +109,20 @@ defmodule ModBoss.Schema do
         schema do
           holding_register 1..5, :model, as: {ModBoss.Encoding, :ascii}
           holding_register 6, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
-          holding_register 7, :indoor_temp, as: {ModBoss.Encoding, :unsigned_int}
+          holding_register 10, :setpoint, as: :scaled, mode: :w
 
-          input_register 200, :foo, as: {ModBoss.Encoding, :unsigned_int}
-          coil 300, :bar, as: :on_off, mode: :rw
-          holding_register 301, :setpoint, as: :scaled, mode: :w
-          discrete_input 400, :baz, as: {ModBoss.Encoding, :boolean}
+          input_register 1, :foo, as: {ModBoss.Encoding, :unsigned_int}
+          coil 1, :bar, as: :on_off, mode: :rw
+          discrete_input 1, :baz, if: fn context -> context.supported end
         end
 
-        # 1-arity: no metadata needed
         def encode_on_off(:on), do: {:ok, 1}
         def encode_on_off(:off), do: {:ok, 0}
 
         def decode_on_off(1), do: {:ok, :on}
         def decode_on_off(0), do: {:ok, :off}
 
-        # 2-arity: uses metadata.context for runtime behavior
+        # Optional 2-arity encoder: uses metadata.context for runtime-based logic
         def encode_scaled(value, metadata) do
           case metadata.context do
             %{unit: :fahrenheit} -> {:ok, round((value - 32) * 5 / 9)}
@@ -160,13 +180,8 @@ defmodule ModBoss.Schema do
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
-  * `:if` — Conditionally determines at runtime whether the mapping is supported.
-    Accepts an anonymous function, an atom referencing a function on the schema module, or a
-    `{Module, :function}` tuple. The callback receives any `:context` map provided to
-    `ModBoss.read/4` or `ModBoss.write/4` and must return `true` for supported or `false` or
-    `{false, custom_value}` for unsupported. Unsupported mappings are neither requested nor
-    encoded/decoded. When attempted to be read, they will simply return `nil` or the custom
-    value as specified.
+  * `:if` — Determines at runtime whether the mapping is supported.
+    See [conditional mapping support](#module-conditional-mapping-support).
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true` for readable
     mappings, `false` for write-only). You should set this to `false` for any register
@@ -183,13 +198,8 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
-  * `:if` — Conditionally determines at runtime whether the mapping is supported.
-    Accepts an anonymous function, an atom referencing a function on the schema module, or a
-    `{Module, :function}` tuple. The callback receives any `:context` map provided to
-    `ModBoss.read/4` and must return `true` for supported or `false` or
-    `{false, custom_value}` for unsupported. Unsupported mappings are neither requested nor
-    decoded. When attempted to be read, they will simply return `nil` or the custom
-    value as specified.
+  * `:if` — Determines at runtime whether the mapping is supported.
+    See [conditional mapping support](#module-conditional-mapping-support).
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true`). You should
     set this to `false` for any register that triggers side effects when read (e.g.
@@ -207,13 +217,8 @@ defmodule ModBoss.Schema do
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
-  * `:if` — Conditionally determines at runtime whether the mapping is supported.
-    Accepts an anonymous function, an atom referencing a function on the schema module, or a
-    `{Module, :function}` tuple. The callback receives any `:context` map provided to
-    `ModBoss.read/4` or `ModBoss.write/4` and must return `true` for supported or `false` or
-    `{false, custom_value}` for unsupported. Unsupported mappings are neither requested nor
-    encoded/decoded. When attempted to be read, they will simply return `nil` or the custom
-    value as specified.
+  * `:if` — Determines at runtime whether the mapping is supported.
+    See [conditional mapping support](#module-conditional-mapping-support).
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true` for readable
     mappings, `false` for write-only). You should set this to `false` for any coil
@@ -230,13 +235,8 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
-  * `:if` — Conditionally determines at runtime whether the mapping is supported.
-    Accepts an anonymous function, an atom referencing a function on the schema module, or a
-    `{Module, :function}` tuple. The callback receives any `:context` map provided to
-    `ModBoss.read/4` and must return `true` for supported or `false` or
-    `{false, custom_value}` for unsupported. Unsupported mappings are neither requested nor
-    decoded. When attempted to be read, they will simply return `nil` or the custom
-    value as specified.
+  * `:if` — Determines at runtime whether the mapping is supported.
+    See [conditional mapping support](#module-conditional-mapping-support).
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true`). You should
     set this to `false` for any input that triggers side effects when read (e.g.

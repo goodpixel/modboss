@@ -85,7 +85,8 @@ defmodule ModBoss do
   > A gap will only be bridged if **every** address within it belongs to a
   > known, gap-safe mapping (`gap_safe: true`, the default for readable mappings).
   > Unmapped addresses and mappings with `gap_safe: false` both prevent a gap
-  > from being bridged.
+  > from being bridged. Unsupported mappings (as determined by the `:if` option)
+  > are not considered gap safe.
   >
   > For example, given this schema:
   >
