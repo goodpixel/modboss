@@ -719,6 +719,52 @@ defmodule ModBoss.TelemetryTest do
       refute_receive {:telemetry, [:modboss, :write_callback, :start], _, _}
     end
 
+    test "emits :write start and exception events when a conditional mapping's `:if` callback returns an invalid value",
+         %{device: device} do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :conditional, mode: :w, if: fn _ -> :maybe end
+        end
+      end
+      """)
+
+      assert_raise RuntimeError, ~r/Invalid return from conditional evaluation/, fn ->
+        ModBoss.write(schema, %{conditional: 1}, write_func(device))
+      end
+
+      assert_receive {:telemetry, [:modboss, :write, :start], _, _}
+      assert_receive {:telemetry, [:modboss, :write, :exception], _, metadata}
+      assert metadata.kind == :error
+    end
+
+    test "emits :write start and stop events when encoding fails", %{device: device} do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :bad_encode, mode: :w, as: :boom
+        end
+
+        def encode_boom(_value, _metadata), do: {:error, "nope"}
+      end
+      """)
+
+      assert {:error, "Failed to encode :bad_encode. nope"} =
+               ModBoss.write(schema, %{bad_encode: 1}, write_func(device))
+
+      assert_receive {:telemetry, [:modboss, :write, :start], _, _}
+      assert_receive {:telemetry, [:modboss, :write, :stop], _, metadata}
+      assert metadata.result == {:error, "Failed to encode :bad_encode. nope"}
+    end
+
     test "includes context in all event metadata when context is provided", %{device: device} do
       :ok =
         ModBoss.write(TestSchema, [baz: 99], write_func(device), context: %{firmware: "2.0"})

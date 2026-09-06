@@ -505,19 +505,13 @@ defmodule ModBoss do
     opts = evaluate_write_opts(opts)
 
     with {:ok, mappings} <- get_mappings(:writable, module, names),
-         mappings <- put_values(mappings, values),
-         {supported, unsupported} <- split_unsupported(mappings, opts.context),
-         {:ok, supported} <- encode_mappings(supported, opts.context) do
-      do_writes(module, names, supported, unsupported, write_func, opts)
+         mappings <- put_values(mappings, values) do
+      do_writes(module, names, mappings, write_func, opts)
     end
   end
 
   defp get_keys(params) when is_map(params), do: Map.keys(params)
   defp get_keys(params) when is_list(params), do: Keyword.keys(params)
-
-  defp split_unsupported(mappings, context) do
-    Enum.split_with(mappings, &Mapping.supported?(&1, context))
-  end
 
   @default_write_opts %{max_attempts: 1, context: %{}}
 
@@ -571,7 +565,7 @@ defmodule ModBoss do
   defp unwritable(mappings), do: Enum.reject(mappings, &Mapping.writable?/1)
 
   if Code.ensure_loaded?(:telemetry) do
-    defp do_writes(module, names, mappings, unsupported, write_func, opts) do
+    defp do_writes(module, names, mappings, write_func, opts) do
       start_metadata = %{schema: module, names: names, context: opts.context}
 
       :telemetry.span([:modboss, :write], start_metadata, fn ->
@@ -585,28 +579,37 @@ defmodule ModBoss do
 
         stop_metadata =
           start_metadata
-          |> Map.put(:unsupported, Enum.map(unsupported, & &1.name))
+          |> Map.put(:unsupported, stats.unsupported)
           |> Map.put(:result, result)
 
         {result, stop_measurements, stop_metadata}
       end)
     end
   else
-    defp do_writes(module, _names, mappings, _unsupported, write_func, opts) do
+    defp do_writes(module, _names, mappings, write_func, opts) do
       {result, _} = write_mappings(module, mappings, write_func, opts)
       result
     end
   end
 
   defp write_mappings(module, mappings, write_func, opts) do
-    initial_stats = %{
-      objects: 0,
-      batches: 0,
-      total_attempts: 0
-    }
+    {supported, unsupported} = Enum.split_with(mappings, &Mapping.supported?(&1, opts.context))
+    initial_stats = %{objects: 0, batches: 0, total_attempts: 0}
 
-    mappings
-    |> chunk_mappings(module, :write, opts)
+    {write_result, stats} =
+      with {:ok, encoded} <- encode_mappings(supported, opts.context) do
+        encoded
+        |> chunk_mappings(module, :write, opts)
+        |> write_chunks(module, write_func, initial_stats, opts)
+      else
+        {:error, error} -> {{:error, error}, initial_stats}
+      end
+
+    {write_result, Map.put(stats, :unsupported, Enum.map(unsupported, & &1.name))}
+  end
+
+  defp write_chunks(chunks, module, write_func, initial_stats, opts) do
+    chunks
     |> Enum.reduce_while({:ok, initial_stats}, fn chunk, {:ok, stats} ->
       {batched_mappings, _gap_addresses = 0, _largest_gap = 0} = chunk
       [first | _rest] = batched_mappings
