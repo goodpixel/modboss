@@ -696,7 +696,7 @@ defmodule ModBoss do
 
     gap_safe_addresses =
       if mode == :read and Enum.any?(opts.max_gap, fn {_, size} -> size > 0 end) do
-        gap_safe_addresses(module, opts.context)
+        gap_safe_addresses(module, mappings, opts.context)
       else
         MapSet.new()
       end
@@ -752,14 +752,37 @@ defmodule ModBoss do
       allow_gap?(gap, current_mapping, gap_safe_addresses, opts)
   end
 
-  defp gap_safe_addresses(module, context) do
+  defp gap_safe_addresses(module, mappings, context) do
+    bounds = address_bounds(mappings)
+
     module.__modboss_schema__()
     |> Map.values()
-    |> Enum.filter(&(&1.gap_safe and Mapping.supported?(&1, context)))
+    |> Enum.filter(
+      &(&1.gap_safe and within_bounds?(&1, bounds) and Mapping.supported?(&1, context))
+    )
     |> Enum.flat_map(fn mapping ->
       mapping |> Mapping.address_range() |> Enum.map(&{mapping.type, &1})
     end)
     |> MapSet.new()
+  end
+
+  defp address_bounds(mappings) do
+    mappings
+    |> Enum.group_by(& &1.type, &Mapping.address_range/1)
+    |> Map.new(fn {type, ranges} ->
+      {type, Enum.min_by(ranges, & &1.first).first..Enum.max_by(ranges, & &1.last).last}
+    end)
+  end
+
+  defp within_bounds?(mapping, bounds) do
+    case Map.fetch(bounds, mapping.type) do
+      {:ok, range} ->
+        mapping_range = Mapping.address_range(mapping)
+        mapping_range.first <= range.last and mapping_range.last >= range.first
+
+      :error ->
+        false
+    end
   end
 
   defp allow_gap?(gap, current_mapping, gap_safe_addresses, opts) do

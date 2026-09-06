@@ -147,6 +147,36 @@ defmodule ModBossTest do
       assert 1 = get_read_count(device)
     end
 
+    test "gap tolerance does not evaluate `:if` callback for mappings outside the requested range" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :bar
+          holding_register 3, :baz
+          holding_register 4, :qux, if: fn _ -> raise "Shouldn't get here!" end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 11,
+        {:holding_register, 2} => 22,
+        {:holding_register, 3} => 33,
+        {:holding_register, 4} => 44
+      })
+
+      # :qux is outside the range of requested mappings, so its `:if` callback shouln't run
+      assert {:ok, %{foo: 11, baz: 33}} =
+               ModBoss.read(schema, [:foo, :baz], read_func(device), max_gap: 10)
+    end
+
     test "reads an individual mapping by name, returning a single result" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       encode_and_set(device, FakeSchema, foo: 123)
