@@ -85,11 +85,15 @@ defmodule ModBoss.MappingTest do
   end
 
   describe "address_range/1" do
-    mapping = Mapping.new(__MODULE__, :foo, :holding_register, 3)
-    assert 3..3 = Mapping.address_range(mapping)
+    test "returns the range for a single register mapping" do
+      mapping = Mapping.new(__MODULE__, :foo, :holding_register, 3)
+      assert 3..3 = Mapping.address_range(mapping)
+    end
 
-    mapping = Mapping.new(__MODULE__, :foo, :holding_register, 27..31)
-    assert 27..31 = Mapping.address_range(mapping)
+    test "returns the range for a multi-register mapping" do
+      mapping = Mapping.new(__MODULE__, :foo, :coil, 27..31)
+      assert 27..31 = Mapping.address_range(mapping)
+    end
   end
 
   describe "is_adjacent/2" do
