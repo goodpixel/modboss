@@ -281,14 +281,21 @@ defmodule ModBoss.Schema do
 
   def validate_name!(_env, _name), do: :ok
 
-  defp validate_if_ast!(env, name, {:fn, _, [{:->, _, [args, _body]}]}) when length(args) != 1 do
-    raise CompileError,
-      file: env.file,
-      line: env.line,
-      description: "Anonymous `:if` callback for #{inspect(name)} mapping must be arity 1."
+  defp validate_if_ast!(env, name, {:fn, _, [{:->, _, [args, _body]}]}) do
+    if fn_arity(args) != 1 do
+      raise CompileError,
+        file: env.file,
+        line: env.line,
+        description: "Anonymous `:if` callback for #{inspect(name)} mapping must be arity 1."
+    end
   end
 
   defp validate_if_ast!(_env, _name, _), do: :ok
+
+  # When guards are in the mix, the function args are everything but
+  # the final "when_args." Otherwise, it's just the top-level "args."
+  defp fn_arity([{:when, _, when_args}]), do: length(when_args) - 1
+  defp fn_arity(args), do: length(args)
 
   defp to_supported_ast(true, _env, _name), do: true
   defp to_supported_ast(false, _env, _name), do: false

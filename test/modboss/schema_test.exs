@@ -340,6 +340,20 @@ defmodule ModBoss.SchemaTest do
       end
     end
 
+    test "raises a compile error for anonymous `:if` callback that's not arity 1 when a guard is in the mix" do
+      assert_raise CompileError, ~r/must be arity 1/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema
+
+          schema do
+            holding_register 1, :foo, if: fn ctx, extra when is_map(ctx) -> extra end
+          end
+        end
+        """)
+      end
+    end
+
     test "raises a compile error when local `:if` function is not defined" do
       assert_raise CompileError, ~r/Expected supported\?\/1 to be defined/, fn ->
         Code.compile_string("""
