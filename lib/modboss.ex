@@ -239,8 +239,8 @@ defmodule ModBoss do
     Enum.reduce(mappings, {[], []}, fn mapping, {supported, unsupported} ->
       case Mapping.evaluate_support(mapping, context) do
         true -> {[mapping | supported], unsupported}
-        false -> {supported, [%{mapping | value: nil} | unsupported]}
-        {false, custom_value} -> {supported, [%{mapping | value: custom_value} | unsupported]}
+        false -> {supported, [%{mapping | value: nil, gap_safe: false} | unsupported]}
+        {false, value} -> {supported, [%{mapping | value: value, gap_safe: false} | unsupported]}
       end
     end)
   end

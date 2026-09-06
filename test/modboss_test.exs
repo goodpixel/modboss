@@ -1496,6 +1496,28 @@ defmodule ModBossTest do
       refute Map.has_key?(result, :value)
     end
 
+    test "debug mode reports `gap_safe: false` for a mapping that's unsupported for the context" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :conditional, if: fn _ -> false end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert {:ok, %{gap_safe: false}} =
+               ModBoss.read(schema, :conditional, read_func(device),
+                 debug: true,
+                 context: %{supported: false}
+               )
+    end
+
     test "debug mode with :all returns a map of all readable mapping details" do
       schema = unique_module()
 
