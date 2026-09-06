@@ -182,6 +182,19 @@ defmodule ModBoss.Mapping do
       {false, custom_value} -> {false, custom_value}
       invalid -> raise_invalid_condition(name, context, invalid)
     end
+  rescue
+    e in FunctionClauseError ->
+      f = Function.info(fun)
+
+      if e.module == f[:module] and e.function == f[:name] and e.arity == f[:arity] do
+        raise """
+        Conditional evaluation of `#{inspect(name)}` failed with no matching clause. \
+        Make sure your context always includes the necessary values for determining conditional \
+        support or include a fallback clause. Provided context was: #{inspect(context)}.
+        """
+      else
+        reraise e, __STACKTRACE__
+      end
   end
 
   defp raise_invalid_condition(name, context, return_value) do
