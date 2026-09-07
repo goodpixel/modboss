@@ -2544,6 +2544,27 @@ defmodule ModBossTest do
 
       assert {:ok, _encoded_values} = ModBoss.encode(schema, %{foo: 1, bar: 2})
     end
+
+    test "skips encoding unsupported conditional mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :bar, mode: :w, if: fn ctx -> ctx.supported end
+        end
+      end
+      """)
+
+      assert {:ok, %{{:holding_register, 1} => 10}} ==
+               ModBoss.encode(schema, %{foo: 10, bar: 20}, context: %{supported: false})
+
+      assert {:ok, %{{:holding_register, 1} => 10, {:holding_register, 2} => 20}} ==
+               ModBoss.encode(schema, %{foo: 10, bar: 20}, context: %{supported: true})
+    end
   end
 
   defp encode_and_set(device, schema, values) do

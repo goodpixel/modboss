@@ -408,7 +408,9 @@ defmodule ModBoss do
   ## Opts
     * `:context` — a map of arbitrary data that will be included in the
       `ModBoss.Encoding.Metadata` struct passed to encode functions (when using
-      2-arity encoders). Defaults to `%{}`.
+      2-arity encoders) and passed to any `:if` callbacks declared in the schema for
+      determining runtime support of particular mappings. Defaults to `%{}`. Mappings
+      determined to be unsupported are skipped—neither encoded nor included in the result.
 
   ## Example
 
@@ -421,7 +423,8 @@ defmodule ModBoss do
 
     with {:ok, mappings} <- get_mappings(:any, module, get_keys(values)),
          mappings <- put_values(mappings, values),
-         {:ok, mappings} <- encode_mappings(mappings, opts.context) do
+         supported <- Enum.filter(mappings, &Mapping.supported?(&1, opts.context)),
+         {:ok, mappings} <- encode_mappings(supported, opts.context) do
       {:ok, flatten_encoded_values(mappings)}
     end
   end
