@@ -216,11 +216,12 @@ defmodule ModBoss do
   end
 
   defp read_mappings(module, mappings, read_func, opts) do
+    requested_names = MapSet.new(mappings, & &1.name)
     {supported, unsupported} = evaluate_unsupported(mappings, opts.context)
 
     {read_result, stats} =
       supported
-      |> chunk_mappings(module, :read, opts)
+      |> chunk_mappings(module, :read, opts, requested_names)
       |> read_chunks(module, read_func, opts)
 
     stats = Map.put(stats, :unsupported, Enum.map(unsupported, & &1.name))
@@ -599,7 +600,7 @@ defmodule ModBoss do
     {write_result, stats} =
       with {:ok, encoded} <- encode_mappings(supported, opts.context) do
         encoded
-        |> chunk_mappings(module, :write, opts)
+        |> chunk_mappings(module, :write, opts, MapSet.new(mappings, & &1.name))
         |> write_chunks(module, write_func, initial_stats, opts)
       else
         {:error, error} -> {{:error, error}, initial_stats}
@@ -689,14 +690,14 @@ defmodule ModBoss do
   defp validate!(%{context: c} = opts, :context) when is_map(c), do: opts
   defp validate!(opts, opt), do: raise("Invalid option #{inspect([{opt, opts[opt]}])}.")
 
-  @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
+  @spec chunk_mappings([Mapping.t()], module(), :read | :write, map(), MapSet.t()) ::
           [{Mapping.object_type(), integer(), [any()]}]
-  defp chunk_mappings(mappings, module, mode, opts) do
+  defp chunk_mappings(mappings, module, mode, opts, requested_names) do
     initial_acc = {_mappings = [], _address_count = 0, _gap_address_count = 0, _largest_gap = 0}
 
     gap_safe_addresses =
       if mode == :read and Enum.any?(opts.max_gap, fn {_, size} -> size > 0 end) do
-        gap_safe_addresses(module, mappings, opts.context)
+        gap_safe_addresses(module, mappings, requested_names, opts.context)
       else
         MapSet.new()
       end
@@ -752,11 +753,12 @@ defmodule ModBoss do
       allow_gap?(gap, current_mapping, gap_safe_addresses, opts)
   end
 
-  defp gap_safe_addresses(module, mappings, context) do
+  defp gap_safe_addresses(module, mappings, requested_names, context) do
     bounds = address_bounds(mappings)
 
     module.__modboss_schema__()
     |> Map.values()
+    |> Enum.reject(&MapSet.member?(requested_names, &1.name))
     |> Enum.filter(
       &(&1.gap_safe and within_bounds?(&1, bounds) and Mapping.supported?(&1, context))
     )

@@ -177,6 +177,81 @@ defmodule ModBossTest do
                ModBoss.read(schema, [:foo, :baz], read_func(device), max_gap: 10)
     end
 
+    test "only evaluates `:if` once for supported mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo, if: fn _ctx ->
+            count = Process.get(:foo_if_calls, 0) + 1
+            Process.put(:foo_if_calls, count)
+
+            if count <= 1 do
+              true
+            else
+              raise "`:if` re-evaluated for :foo"
+            end
+          end
+
+          holding_register 2, :bar
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 11,
+        {:holding_register, 2} => 22,
+        {:holding_register, 3} => 33
+      })
+
+      assert {:ok, %{foo: 11, baz: 33}} =
+               ModBoss.read(schema, [:foo, :baz], read_func(device), max_gap: 10)
+    end
+
+    test "only evaluates `:if` once for unsupported mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+
+          holding_register 2, :bar, if: fn _ctx ->
+            count = Process.get(:bar_if_calls, 0) + 1
+            Process.put(:bar_if_calls, count)
+
+            if count <= 1 do
+              {false, :unsupported}
+            else
+              raise "`:if` re-evaluated for :bar"
+            end
+          end
+
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 11,
+        {:holding_register, 2} => 22,
+        {:holding_register, 3} => 33
+      })
+
+      assert {:ok, %{foo: 11, bar: :unsupported, baz: 33}} =
+               ModBoss.read(schema, [:foo, :bar, :baz], read_func(device), max_gap: 10)
+    end
+
     test "reads an individual mapping by name, returning a single result" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       encode_and_set(device, FakeSchema, foo: 123)
