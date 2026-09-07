@@ -263,7 +263,6 @@ defmodule ModBoss do
       [first | _rest] = mappings
       last = List.last(mappings)
 
-      names = Enum.map(mappings, & &1.name)
       starting_address = first.starting_address
       ending_address = last.starting_address + last.address_count - 1
       address_count = ending_address - starting_address + 1
@@ -271,7 +270,7 @@ defmodule ModBoss do
 
       {result, callback_attempts} =
         read_func
-        |> wrap_read_callback(module, names, gap_addresses, largest_gap, opts)
+        |> wrap_read_callback(module, gap_addresses, largest_gap, opts)
         |> read_batch(first.type, starting_address, address_count)
 
       updated_stats = %{
@@ -291,13 +290,12 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp wrap_read_callback(read_func, module, names, gap_addresses, largest_gap, opts) do
+    defp wrap_read_callback(read_func, module, gap_addresses, largest_gap, opts) do
       max_attempts = opts.max_attempts
 
       fn type, starting_address, address_count ->
         metadata = %{
           schema: module,
-          names: names,
           object_type: type,
           starting_address: starting_address,
           address_count: address_count,
@@ -318,7 +316,7 @@ defmodule ModBoss do
       end
     end
   else
-    defp wrap_read_callback(read_func, _, _, _, _, opts) do
+    defp wrap_read_callback(read_func, _, _, _, opts) do
       fn type, starting_address, address_count ->
         retry(opts.max_attempts, fn _attempt ->
           read_func.(type, starting_address, address_count)
@@ -626,8 +624,7 @@ defmodule ModBoss do
           [_ | _] = multiple_values -> multiple_values
         end
 
-      names = Enum.map(batched_mappings, & &1.name)
-      wrapped_write = wrap_write_callback(write_func, module, names, address_count, opts)
+      wrapped_write = wrap_write_callback(write_func, module, address_count, opts)
       {result, attempts} = wrapped_write.(first.type, first.starting_address, value_or_values)
 
       updated_stats = %{
@@ -645,13 +642,12 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp wrap_write_callback(write_func, module, names, address_count, opts) do
+    defp wrap_write_callback(write_func, module, address_count, opts) do
       max_attempts = opts.max_attempts
 
       fn type, starting_address, value_or_values ->
         metadata = %{
           schema: module,
-          names: names,
           object_type: type,
           starting_address: starting_address,
           address_count: address_count,
@@ -671,7 +667,7 @@ defmodule ModBoss do
       end
     end
   else
-    defp wrap_write_callback(write_func, _, _, _, opts) do
+    defp wrap_write_callback(write_func, _, _, opts) do
       fn type, starting_address, value_or_values ->
         retry(opts.max_attempts, fn _attempt ->
           write_func.(type, starting_address, value_or_values)

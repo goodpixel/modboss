@@ -166,7 +166,6 @@ defmodule ModBoss.Telemetry do
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
         context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
@@ -190,7 +189,6 @@ defmodule ModBoss.Telemetry do
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
         context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
@@ -213,7 +211,6 @@ defmodule ModBoss.Telemetry do
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
         context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
@@ -238,7 +235,6 @@ defmodule ModBoss.Telemetry do
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
         context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
@@ -260,7 +256,6 @@ defmodule ModBoss.Telemetry do
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
         context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
@@ -283,7 +278,6 @@ defmodule ModBoss.Telemetry do
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
         context: map(),
         object_type: atom(),
         starting_address: non_neg_integer(),
@@ -322,8 +316,8 @@ defmodule ModBoss.Telemetry do
   ## Metadata details
 
   * `schema` — the schema module (e.g. `MyDevice.Schema`).
-  * `names` — mapping name(s) as a list of atoms. On per-operation events, all
-    requested names; on per-callback events, only the names in that batch.
+  * `names` — mapping name(s) as a list of atoms, requested for the operation.
+    Only present on per-operation events.
   * `context` — the value of the `:context` option passed to `ModBoss.read/4`
     or `ModBoss.write/4`. Always present; defaults to `%{}` when not provided.
   * `result` — the raw result: `{:ok, value}` or `{:error, reason}` for reads;
