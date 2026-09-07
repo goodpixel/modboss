@@ -49,6 +49,7 @@ defmodule ModBoss.Mapping do
     as = Keyword.get(opts, :as) |> expand_as(module)
     mode = Keyword.get(opts, :mode, :r)
     gap_safe = Keyword.get_lazy(opts, :gap_safe, fn -> mode in [:r, :rw] end)
+    supported = Keyword.get(opts, :supported, true)
 
     opts =
       Keyword.merge(opts,
@@ -58,7 +59,8 @@ defmodule ModBoss.Mapping do
         starting_address: address_range.first,
         address_count: address_range.last - address_range.first + 1,
         as: as,
-        gap_safe: gap_safe
+        gap_safe: gap_safe,
+        supported: supported
       )
 
     __MODULE__
