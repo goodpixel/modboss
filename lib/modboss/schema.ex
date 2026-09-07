@@ -281,8 +281,8 @@ defmodule ModBoss.Schema do
 
   def validate_name!(_env, _name), do: :ok
 
-  defp validate_if_ast!(env, name, {:fn, _, [{:->, _, [args, _body]}]}) do
-    if fn_arity(args) != 1 do
+  defp validate_if_ast!(env, name, {:fn, _, clauses}) do
+    if Enum.any?(clauses, fn {:->, _, [args, _body]} -> fn_arity(args) != 1 end) do
       raise CompileError,
         file: env.file,
         line: env.line,

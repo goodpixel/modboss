@@ -354,6 +354,32 @@ defmodule ModBoss.SchemaTest do
       end
     end
 
+    test "raises a compile error for a multi-clause anonymous `:if` callback that's not arity 1" do
+      assert_raise CompileError, ~r/must be arity 1/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema
+
+          schema do
+            holding_register 1, :foo, if: fn %{firmware: v}, extra -> v + extra; _, _ -> false end
+          end
+        end
+        """)
+      end
+    end
+
+    test "does not raise for a multi-clause anonymous `:if` callback that's arity 1" do
+      Code.compile_string("""
+      defmodule #{unique_module()} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo, if: fn %{firmware: v} -> v >= 2; _ -> false end
+        end
+      end
+      """)
+    end
+
     test "raises a compile error when local `:if` function is not defined" do
       assert_raise CompileError, ~r/Expected supported\?\/1 to be defined/, fn ->
         Code.compile_string("""
