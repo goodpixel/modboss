@@ -62,7 +62,8 @@ defmodule ModBoss.Telemetry do
         schema: module(),
         names: [atom()],
         context: map(),
-        result: term()
+        result: term(),
+        unsupported: [atom()]
       }
 
   ### Read Exception
@@ -120,7 +121,8 @@ defmodule ModBoss.Telemetry do
         schema: module(),
         names: [atom()],
         context: map(),
-        result: term()
+        result: term(),
+        unsupported: [atom()]
       }
 
   ### Write Exception
@@ -331,5 +333,9 @@ defmodule ModBoss.Telemetry do
   * `address_count` — number of addresses in the request.
   * `attempt` — which attempted callback invocation this is, from 1 up to `max_attempts`.
   * `max_attempts` — the configured maximum number of attempts for this callback.
+  * `unsupported` — mapping names whose `:if` condition evaluated to `false` for
+    the given context. These mappings were skipped (not read from or written to
+    the device). Empty list when all requested mappings are supported. Only present
+    on per-operation stop events.
   """
 end

@@ -79,7 +79,29 @@ defmodule ModBoss.Schema do
   > (e.g. in `ModBoss.Encoding.decode_ascii/1`), the decode function will be
   > passed a **List** of values.
 
-  ## Example
+  ## Conditional mapping support
+
+  Some mappings may only be available under specific circumstances, like when
+  running a particular firmware version. ModBoss allows conditional support of
+  mappings at runtime via the `:if` option.
+
+  `:if` accepts an anonymous function, an atom referencing a function on the
+  schema module, or a `{Module, :function}` tuple. The callback receives any
+  `:context` provided to `ModBoss.read/4` or `ModBoss.write/4` and must return
+  `true` for supported or `false` or `{false, custom_value}` for unsupported
+  (custom return values are only supported on reads). Unsupported mappings are
+  neither requested nor encoded/decoded. When attempted to be read, they will
+  simply return `nil` or the custom value as specified.
+
+  > #### Gap safety {: .info}
+  >
+  > Conditional mappings determined to be **unsupported** for the given context
+  > are considered gap _unsafe_.
+
+  `ModBoss.Telemetry` exposes an `:unsupported` metric to track which mappings were
+  excluded from any given read or write.
+
+  ## Examples
 
       defmodule MyDevice.Schema do
         use ModBoss.Schema
@@ -87,22 +109,20 @@ defmodule ModBoss.Schema do
         schema do
           holding_register 1..5, :model, as: {ModBoss.Encoding, :ascii}
           holding_register 6, :outdoor_temp, as: {ModBoss.Encoding, :signed_int}
-          holding_register 7, :indoor_temp, as: {ModBoss.Encoding, :unsigned_int}
+          holding_register 10, :setpoint, as: :scaled, mode: :w
 
-          input_register 200, :foo, as: {ModBoss.Encoding, :unsigned_int}
-          coil 300, :bar, as: :on_off, mode: :rw
-          holding_register 301, :setpoint, as: :scaled, mode: :w
-          discrete_input 400, :baz, as: {ModBoss.Encoding, :boolean}
+          input_register 1, :foo, as: {ModBoss.Encoding, :unsigned_int}
+          coil 1, :bar, as: :on_off, mode: :rw
+          discrete_input 1, :baz, if: fn context -> context.supported end
         end
 
-        # 1-arity: no metadata needed
         def encode_on_off(:on), do: {:ok, 1}
         def encode_on_off(:off), do: {:ok, 0}
 
         def decode_on_off(1), do: {:ok, :on}
         def decode_on_off(0), do: {:ok, :off}
 
-        # 2-arity: uses metadata.context for runtime behavior
+        # Optional 2-arity encoder: uses metadata.context for runtime-based logic
         def encode_scaled(value, metadata) do
           case metadata.context do
             %{unit: :fahrenheit} -> {:ok, round((value - 32) * 5 / 9)}
@@ -122,6 +142,7 @@ defmodule ModBoss.Schema do
       import unquote(__MODULE__), only: [schema: 1]
 
       Module.register_attribute(__MODULE__, :modboss_mappings, accumulate: true)
+      Module.register_attribute(__MODULE__, :modboss_mapping_support, accumulate: true)
       Module.put_attribute(__MODULE__, :max_reads_per_batch, unquote(max_reads))
       Module.put_attribute(__MODULE__, :max_writes_per_batch, unquote(max_writes))
 
@@ -159,6 +180,8 @@ defmodule ModBoss.Schema do
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
+  * `:if` — Determines at runtime whether the mapping is supported.
+    See [conditional mapping support](#module-conditional-mapping-support).
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true` for readable
     mappings, `false` for write-only). You should set this to `false` for any register
@@ -166,12 +189,7 @@ defmodule ModBoss.Schema do
     `:max_gap` option in `ModBoss.read/4` for details on gap tolerance.
   """
   defmacro holding_register(addresses, name, opts \\ []) do
-    ModBoss.Schema.validate_name!(__CALLER__, name)
-    module = __CALLER__.module
-
-    quote bind_quoted: binding() do
-      ModBoss.Schema.create_mapping(module, :holding_register, addresses, name, opts)
-    end
+    define_mapping(__CALLER__, :holding_register, addresses, name, opts)
   end
 
   @doc """
@@ -180,6 +198,8 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
+  * `:if` — Determines at runtime whether the mapping is supported.
+    See [conditional mapping support](#module-conditional-mapping-support).
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true`). You should
     set this to `false` for any register that triggers side effects when read (e.g.
@@ -187,12 +207,7 @@ defmodule ModBoss.Schema do
     on gap tolerance.
   """
   defmacro input_register(addresses, name, opts \\ []) do
-    ModBoss.Schema.validate_name!(__CALLER__, name)
-    module = __CALLER__.module
-
-    quote bind_quoted: binding() do
-      ModBoss.Schema.create_mapping(module, :input_register, addresses, name, opts)
-    end
+    define_mapping(__CALLER__, :input_register, addresses, name, opts)
   end
 
   @doc """
@@ -202,6 +217,8 @@ defmodule ModBoss.Schema do
   * `:mode` — Makes the mapping readable/writable — can be one of `[:r, :rw, :w]` (default: `:r`)
   * `:as` — Determines which encoding/decoding functions to use when writing/reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
+  * `:if` — Determines at runtime whether the mapping is supported.
+    See [conditional mapping support](#module-conditional-mapping-support).
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true` for readable
     mappings, `false` for write-only). You should set this to `false` for any coil
@@ -209,12 +226,7 @@ defmodule ModBoss.Schema do
     option in `ModBoss.read/4` for details on gap tolerance.
   """
   defmacro coil(addresses, name, opts \\ []) do
-    ModBoss.Schema.validate_name!(__CALLER__, name)
-    module = __CALLER__.module
-
-    quote bind_quoted: binding() do
-      ModBoss.Schema.create_mapping(module, :coil, addresses, name, opts)
-    end
+    define_mapping(__CALLER__, :coil, addresses, name, opts)
   end
 
   @doc """
@@ -223,6 +235,8 @@ defmodule ModBoss.Schema do
   ## Opts
   * `:as` — Determines which decoding functions to use when reading values.
     See explanation of [automatic encoding/decoding](ModBoss.Schema.html#module-automatic-encoding-decoding).
+  * `:if` — Determines at runtime whether the mapping is supported.
+    See [conditional mapping support](#module-conditional-mapping-support).
   * `:gap_safe` — Whether this mapping's addresses are safe to read incidentally
     when bridging a gap between other requested mappings (default: `true`). You should
     set this to `false` for any input that triggers side effects when read (e.g.
@@ -230,11 +244,30 @@ defmodule ModBoss.Schema do
     on gap tolerance.
   """
   defmacro discrete_input(addresses, name, opts \\ []) do
-    ModBoss.Schema.validate_name!(__CALLER__, name)
-    module = __CALLER__.module
+    define_mapping(__CALLER__, :discrete_input, addresses, name, opts)
+  end
 
-    quote bind_quoted: binding() do
-      ModBoss.Schema.create_mapping(module, :discrete_input, addresses, name, opts)
+  defp define_mapping(caller, type, addresses, name, opts) do
+    module = caller.module
+    {if_ast, opts} = Keyword.pop(opts, :if, true)
+
+    validate_name!(caller, name)
+    validate_if_ast!(caller, name, if_ast)
+
+    create_mapping =
+      quote bind_quoted: [
+              module: module,
+              type: type,
+              addresses: addresses,
+              name: name,
+              opts: opts
+            ] do
+        ModBoss.Schema.create_mapping(module, type, addresses, name, opts)
+      end
+
+    quote do
+      @modboss_mapping_support {unquote(name), unquote(Macro.escape(if_ast))}
+      unquote(create_mapping)
     end
   end
 
@@ -247,6 +280,41 @@ defmodule ModBoss.Schema do
   end
 
   def validate_name!(_env, _name), do: :ok
+
+  defp validate_if_ast!(env, name, {:fn, _, clauses}) do
+    if Enum.any?(clauses, fn {:->, _, [args, _body]} -> fn_arity(args) != 1 end) do
+      raise CompileError,
+        file: env.file,
+        line: env.line,
+        description: "Anonymous `:if` callback for #{inspect(name)} mapping must be arity 1."
+    end
+  end
+
+  defp validate_if_ast!(_env, _name, _), do: :ok
+
+  # When guards are in the mix, the function args are everything but
+  # the final "when_args." Otherwise, it's just the top-level "args."
+  defp fn_arity([{:when, _, when_args}]), do: length(when_args) - 1
+  defp fn_arity(args), do: length(args)
+
+  defp to_supported_ast(true, _env, _name), do: true
+  defp to_supported_ast(false, _env, _name), do: false
+  defp to_supported_ast({:fn, _, _} = fn_ast, _env, _name), do: fn_ast
+
+  defp to_supported_ast(fun_name, env, _name) when is_atom(fun_name) do
+    quote do: &(unquote(env.module).unquote(fun_name) / 1)
+  end
+
+  defp to_supported_ast({mod_ast, fun_name}, _env, _name) when is_atom(fun_name) do
+    quote do: &(unquote(mod_ast).unquote(fun_name) / 1)
+  end
+
+  defp to_supported_ast(_invalid, env, name) do
+    raise CompileError,
+      file: env.file,
+      line: env.line,
+      description: "Invalid `:if` value for #{inspect(name)} mapping."
+  end
 
   @doc false
   def create_mapping(module, object_type, address_or_range, name, opts) do
@@ -315,12 +383,29 @@ defmodule ModBoss.Schema do
 
     validate_local_encode_functions!(env, mappings)
     validate_local_decode_functions!(env, mappings)
+    validate_local_if_functions!(env)
 
-    mappings =
+    escaped_mappings =
       mappings
       |> Enum.reverse()
       |> Enum.into(%{}, &{&1.name, &1})
       |> Macro.escape()
+
+    mappings_with_normalized_conditions =
+      env.module
+      |> Module.get_attribute(:modboss_mapping_support)
+      |> Enum.reduce(escaped_mappings, fn {mapping_name, if_ast}, acc ->
+        supported_ast = to_supported_ast(if_ast, env, mapping_name)
+
+        quote do
+          Map.update!(unquote(acc), unquote(mapping_name), fn mapping ->
+            %{mapping | supported: unquote(supported_ast)}
+          end)
+        end
+      end)
+
+    Module.delete_attribute(env.module, :modboss_mappings)
+    Module.delete_attribute(env.module, :modboss_mapping_support)
 
     quote do
       def __max_batch__(:read, :holding_register), do: unquote(max_holding_register_reads)
@@ -331,7 +416,7 @@ defmodule ModBoss.Schema do
       def __max_batch__(:write, :holding_register), do: unquote(max_holding_register_writes)
       def __max_batch__(:write, :coil), do: unquote(max_coil_writes)
 
-      def __modboss_schema__, do: unquote(mappings)
+      def __modboss_schema__, do: unquote(mappings_with_normalized_conditions)
     end
   end
 
@@ -402,6 +487,24 @@ defmodule ModBoss.Schema do
         true ->
           :ok
       end
+    end)
+  end
+
+  defp validate_local_if_functions!(env) do
+    env.module
+    |> Module.get_attribute(:modboss_mapping_support)
+    |> Enum.each(fn
+      {name, fun_name} when is_atom(fun_name) and fun_name not in [true, false] ->
+        unless Module.defines?(env.module, {fun_name, 1}) do
+          raise CompileError,
+            file: env.file,
+            line: env.line,
+            description:
+              "Expected #{fun_name}/1 to be defined for `:if` callback on mapping #{inspect(name)}."
+        end
+
+      _ ->
+        :ok
     end)
   end
 end

@@ -477,6 +477,31 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, cb_stop_metadata}
       assert cb_stop_metadata.context == %{}
     end
+
+    test "includes unsupported mapping names in stop metadata", %{device: device} do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :always
+          holding_register 2, :conditional, if: fn ctx -> ctx.supported end
+        end
+      end
+      """)
+
+      set_objects(device, %{{:holding_register, 1} => 42})
+
+      {:ok, _} =
+        ModBoss.read(schema, [:always, :conditional], read_func(device),
+          context: %{supported: false}
+        )
+
+      assert_receive {:telemetry, [:modboss, :read, :stop], _, stop_metadata}
+      assert stop_metadata.unsupported == [:conditional]
+    end
   end
 
   describe "write/3 telemetry" do
@@ -694,6 +719,52 @@ defmodule ModBoss.TelemetryTest do
       refute_receive {:telemetry, [:modboss, :write_callback, :start], _, _}
     end
 
+    test "emits :write start and exception events when a conditional mapping's `:if` callback returns an invalid value",
+         %{device: device} do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :conditional, mode: :w, if: fn _ -> :maybe end
+        end
+      end
+      """)
+
+      assert_raise RuntimeError, ~r/Invalid return from conditional evaluation/, fn ->
+        ModBoss.write(schema, %{conditional: 1}, write_func(device))
+      end
+
+      assert_receive {:telemetry, [:modboss, :write, :start], _, _}
+      assert_receive {:telemetry, [:modboss, :write, :exception], _, metadata}
+      assert metadata.kind == :error
+    end
+
+    test "emits :write start and stop events when encoding fails", %{device: device} do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :bad_encode, mode: :w, as: :boom
+        end
+
+        def encode_boom(_value, _metadata), do: {:error, "nope"}
+      end
+      """)
+
+      assert {:error, "Failed to encode :bad_encode. nope"} =
+               ModBoss.write(schema, %{bad_encode: 1}, write_func(device))
+
+      assert_receive {:telemetry, [:modboss, :write, :start], _, _}
+      assert_receive {:telemetry, [:modboss, :write, :stop], _, metadata}
+      assert metadata.result == {:error, "Failed to encode :bad_encode. nope"}
+    end
+
     test "includes context in all event metadata when context is provided", %{device: device} do
       :ok =
         ModBoss.write(TestSchema, [baz: 99], write_func(device), context: %{firmware: "2.0"})
@@ -741,6 +812,29 @@ defmodule ModBoss.TelemetryTest do
 
       assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, cb_stop_metadata}
       assert cb_stop_metadata.context == %{}
+    end
+
+    test "includes unsupported mapping names in stop metadata", %{device: device} do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :always, mode: :w
+          holding_register 2, :conditional, mode: :w, if: fn ctx -> ctx.supported end
+        end
+      end
+      """)
+
+      :ok =
+        ModBoss.write(schema, %{always: 1, conditional: 99}, write_func(device),
+          context: %{supported: false}
+        )
+
+      assert_receive {:telemetry, [:modboss, :write, :stop], _, stop_metadata}
+      assert stop_metadata.unsupported == [:conditional]
     end
   end
 

@@ -2,6 +2,9 @@ defmodule ModBossTest do
   use ExUnit.Case, async: true
   import ModBoss.CallbackHelpers
 
+  @readable_types [:holding_register, :input_register, :coil, :discrete_input]
+  @writeable_types [:holding_register, :coil]
+
   defmodule FakeSchema do
     use ModBoss.Schema
 
@@ -83,6 +86,172 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
     end
 
+    test "gap tolerance does not read across unsupported conditional mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :middle, if: fn ctx -> ctx.has_middle end
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 11, {:holding_register, 3} => 33})
+
+      # When :middle is unsupported, it should NOT be gap-safe — requires 2 reads
+      {:ok, %{foo: 11, baz: 33}} =
+        ModBoss.read(schema, [:foo, :baz], read_func(device),
+          max_gap: 10,
+          context: %{has_middle: false}
+        )
+
+      assert 2 = get_read_count(device)
+    end
+
+    test "gap tolerance reads across supported conditional mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :middle, if: fn ctx -> ctx.has_middle end
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 11,
+        {:holding_register, 2} => 22,
+        {:holding_register, 3} => 33
+      })
+
+      # When :middle is supported, it IS gap-safe — single batched read
+      {:ok, %{foo: 11, baz: 33}} =
+        ModBoss.read(schema, [:foo, :baz], read_func(device),
+          max_gap: 10,
+          context: %{has_middle: true}
+        )
+
+      assert 1 = get_read_count(device)
+    end
+
+    test "gap tolerance does not evaluate `:if` callback for mappings outside the requested range" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :bar
+          holding_register 3, :baz
+          holding_register 4, :qux, if: fn _ -> raise "Shouldn't get here!" end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 11,
+        {:holding_register, 2} => 22,
+        {:holding_register, 3} => 33,
+        {:holding_register, 4} => 44
+      })
+
+      # :qux is outside the range of requested mappings, so its `:if` callback shouln't run
+      assert {:ok, %{foo: 11, baz: 33}} =
+               ModBoss.read(schema, [:foo, :baz], read_func(device), max_gap: 10)
+    end
+
+    test "only evaluates `:if` once for supported mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo, if: fn _ctx ->
+            count = Process.get(:foo_if_calls, 0) + 1
+            Process.put(:foo_if_calls, count)
+
+            if count <= 1 do
+              true
+            else
+              raise "`:if` re-evaluated for :foo"
+            end
+          end
+
+          holding_register 2, :bar
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 11,
+        {:holding_register, 2} => 22,
+        {:holding_register, 3} => 33
+      })
+
+      assert {:ok, %{foo: 11, baz: 33}} =
+               ModBoss.read(schema, [:foo, :baz], read_func(device), max_gap: 10)
+    end
+
+    test "only evaluates `:if` once for unsupported mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+
+          holding_register 2, :bar, if: fn _ctx ->
+            count = Process.get(:bar_if_calls, 0) + 1
+            Process.put(:bar_if_calls, count)
+
+            if count <= 1 do
+              {false, :unsupported}
+            else
+              raise "`:if` re-evaluated for :bar"
+            end
+          end
+
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 11,
+        {:holding_register, 2} => 22,
+        {:holding_register, 3} => 33
+      })
+
+      assert {:ok, %{foo: 11, bar: :unsupported, baz: 33}} =
+               ModBoss.read(schema, [:foo, :bar, :baz], read_func(device), max_gap: 10)
+    end
+
     test "reads an individual mapping by name, returning a single result" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       encode_and_set(device, FakeSchema, foo: 123)
@@ -108,6 +277,194 @@ defmodule ModBossTest do
 
       assert {:error, "Unknown mapping(s) :foobar, :bazqux for ModBossTest.FakeSchema."} =
                ModBoss.read(FakeSchema, [:foobar, :bazqux], read_func(device))
+    end
+
+    Enum.each(@readable_types, fn object_type ->
+      test "allows conditional reads of #{object_type} mappings based on the `:if` opt" do
+        schema = unique_module()
+
+        Code.compile_string("""
+        defmodule #{schema} do
+          use ModBoss.Schema
+
+          schema do
+            #{unquote(object_type)} 1, :foo
+            #{unquote(object_type)} 2, :bar, if: :supported?
+            #{unquote(object_type)} 3, :baz
+          end
+
+          def supported?(%{include_bar: true}), do: true
+          def supported?(%{include_bar: false}), do: false
+        end
+        """)
+
+        device = start_supervised!({Agent, fn -> @initial_state end})
+
+        set_objects(device, %{
+          {unquote(object_type), 1} => 1,
+          {unquote(object_type), 2} => 0,
+          {unquote(object_type), 3} => 1
+        })
+
+        # With condition evaluating to true…
+        assert {:ok, %{foo: 1, bar: 0, baz: 1}} =
+                 ModBoss.read(
+                   schema,
+                   [:foo, :bar, :baz],
+                   read_func(device),
+                   context: %{include_bar: true}
+                 )
+
+        # …executes 1 batched read since the supported registers are contiguous.
+        assert 1 = get_read_count(device)
+
+        # With condition func evaluating to false…
+        assert {:ok, %{foo: 1, bar: nil, baz: 1}} =
+                 ModBoss.read(
+                   schema,
+                   [:foo, :bar, :baz],
+                   read_func(device),
+                   context: %{include_bar: false}
+                 )
+
+        # …executes 2 distinct reads since the supported registers are NOT contiguous.
+        assert 2 = get_read_count(device)
+      end
+    end)
+
+    Enum.each(@readable_types, fn object_type ->
+      test "supports various callback formats for conditional #{object_type} mappings" do
+        schema = unique_module()
+
+        Code.compile_string("""
+        defmodule #{schema} do
+          use ModBoss.Schema
+
+          schema do
+            #{unquote(object_type)} 1, :mod_fun, if: {__MODULE__, :supported?}
+            #{unquote(object_type)} 2, :fun, if: :supported?
+            #{unquote(object_type)} 3, :anon, if: fn ctx -> Version.compare(ctx.version, "2.0.0") in [:gt, :eq] end
+          end
+
+          def supported?(ctx) do
+            Version.compare(ctx.version, "2.0.0") in [:gt, :eq]
+          end
+        end
+        """)
+
+        device = start_supervised!({Agent, fn -> @initial_state end})
+
+        set_objects(device, %{
+          {unquote(object_type), 1} => 1,
+          {unquote(object_type), 2} => 0,
+          {unquote(object_type), 3} => 1
+        })
+
+        # With condition evaluating to true…
+        assert {:ok, %{mod_fun: 1, fun: 0, anon: 1}} =
+                 ModBoss.read(
+                   schema,
+                   [:mod_fun, :fun, :anon],
+                   read_func(device),
+                   context: %{version: "2.0.0"}
+                 )
+
+        # With condition func evaluating to false…
+        assert {:ok, %{mod_fun: nil, fun: nil, anon: nil}} =
+                 ModBoss.read(
+                   schema,
+                   [:mod_fun, :fun, :anon],
+                   read_func(device),
+                   context: %{version: "1.9.9"}
+                 )
+      end
+    end)
+
+    test "optionally returns custom response for unsupported mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :bar, if: :supported?
+          holding_register 3, :baz
+        end
+
+        def supported?(%{include_bar: true}), do: true
+        def supported?(%{include_bar: false}), do: {false, :custom_value}
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 10,
+        {:holding_register, 2} => 20,
+        {:holding_register, 3} => 30
+      })
+
+      # With condition func evaluating to true…
+      assert {:ok, %{foo: 10, bar: 20, baz: 30}} =
+               ModBoss.read(schema, [:foo, :bar, :baz], read_func(device),
+                 context: %{include_bar: true}
+               )
+
+      # …single read.
+      assert 1 = get_read_count(device)
+
+      # With condition func evaluating to false…
+      assert {:ok, %{foo: 10, bar: :custom_value, baz: 30}} =
+               ModBoss.read(schema, [:foo, :bar, :baz], read_func(device),
+                 context: %{include_bar: false}
+               )
+
+      # …two reads.
+      assert 2 = get_read_count(device)
+    end
+
+    test "raises when a conditional mapping's `:if` callback returns an invalid value" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :conditional, if: fn _ -> :maybe end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, ~r/Invalid return from conditional evaluation/, fn ->
+        ModBoss.read(schema, [:conditional], read_func(device), context: %{})
+      end
+    end
+
+    test "raises when a conditional mapping's `:if` callback doesn't handle the given context" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :new_feature, if: :supported?
+        end
+
+        def supported?(%{firmware_version: v}), do: v >= 2
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, ~r/Conditional evaluation of `:new_feature` failed/, fn ->
+        ModBoss.read(schema, :new_feature, read_func(device))
+      end
     end
 
     test "refuses to read unless all mappings are declared readable" do
@@ -702,6 +1059,30 @@ defmodule ModBossTest do
              } == result
     end
 
+    test "includes conditionally unsupported mappings when reading `:all`" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :bar, if: fn ctx -> ctx.supported end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+      set_objects(device, %{{:holding_register, 1} => 10, {:holding_register, 2} => 20})
+
+      assert {:ok, %{foo: 10, bar: nil}} =
+               ModBoss.read(schema, :all, read_func(device), context: %{supported: false})
+
+      assert {:ok, %{foo: 10, bar: 20}} =
+               ModBoss.read(schema, :all, read_func(device), context: %{supported: true})
+    end
+
     test "without `:max_gap` opt, makes separate requests for each non-contiguous mapping" do
       schema = unique_module()
 
@@ -1220,6 +1601,28 @@ defmodule ModBossTest do
       refute Map.has_key?(result, :value)
     end
 
+    test "debug mode reports `gap_safe: false` for a mapping that's unsupported for the context" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :conditional, if: fn _ -> false end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert {:ok, %{gap_safe: false}} =
+               ModBoss.read(schema, :conditional, read_func(device),
+                 debug: true,
+                 context: %{supported: false}
+               )
+    end
+
     test "debug mode with :all returns a map of all readable mapping details" do
       schema = unique_module()
 
@@ -1416,6 +1819,144 @@ defmodule ModBossTest do
 
       assert :ok = ModBoss.write(FakeSchema, %{baz: 3}, write_func(device))
       assert get_objects(device) == Map.put(initial_values, {:holding_register, 3}, 3)
+    end
+
+    Enum.each(@writeable_types, fn object_type ->
+      test "skips writes to unsupported conditional #{object_type} mappings" do
+        schema = unique_module()
+
+        Code.compile_string("""
+        defmodule #{schema} do
+          use ModBoss.Schema
+
+          schema do
+            #{unquote(object_type)} 1, :always_writable, mode: :w
+            #{unquote(object_type)} 2, :conditional, mode: :w, if: fn ctx -> ctx.supported end
+          end
+        end
+        """)
+
+        device = start_supervised!({Agent, fn -> @initial_state end})
+
+        assert :ok =
+                 ModBoss.write(schema, %{always_writable: 1, conditional: 1}, write_func(device),
+                   context: %{supported: false}
+                 )
+
+        assert %{
+                 {unquote(object_type), 1} => 1
+               } == get_objects(device)
+
+        assert :ok =
+                 ModBoss.write(schema, %{always_writable: 1, conditional: 1}, write_func(device),
+                   context: %{supported: true}
+                 )
+
+        assert %{
+                 {unquote(object_type), 1} => 1,
+                 {unquote(object_type), 2} => 1
+               } == get_objects(device)
+      end
+    end)
+
+    test "raises when a conditional write mapping's `:if` callback returns an invalid value" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 2, :conditional, mode: :w, if: fn _ -> :maybe end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, ~r/Invalid return from conditional evaluation/, fn ->
+        ModBoss.write(schema, %{conditional: 4}, write_func(device), context: %{})
+      end
+    end
+
+    test "raises when a conditional write mapping's `:if` callback doesn't handle the given context" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 2, :new_feature, mode: :w, if: :supported?
+        end
+
+        def supported?(%{firmware_version: v}), do: v >= 2
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, ~r/Conditional evaluation of `:new_feature` failed/, fn ->
+        ModBoss.write(schema, [new_feature: 4], write_func(device))
+      end
+    end
+
+    test "treats `{false, custom_value}` as unsupported for conditional write mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :always_writable, mode: :w
+          holding_register 2, :conditional, mode: :w, if: fn _ -> {false, :custom_value} end
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert :ok =
+               ModBoss.write(
+                 schema,
+                 %{always_writable: 1, conditional: 2},
+                 write_func(device)
+               )
+
+      assert %{{:holding_register, 1} => 1} = get_objects(device)
+      refute Map.has_key?(get_objects(device), {:holding_register, 2})
+    end
+
+    test "does not encode values for unsupported conditional mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :always_writable, mode: :w
+          holding_register 2, :conditional, mode: :w, as: :scaled, if: fn ctx -> ctx.supported end
+        end
+
+        def encode_scaled(value, _metadata) when is_number(value), do: {:ok, value * 10}
+        def encode_scaled(_value, _metadata), do: {:error, "must be a number"}
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert :ok =
+               ModBoss.write(
+                 schema,
+                 %{always_writable: 1, conditional: :invalid_value},
+                 write_func(device),
+                 context: %{supported: false}
+               )
+
+      assert %{{:holding_register, 1} => 1} = get_objects(device)
+      refute Map.has_key?(get_objects(device), {:holding_register, 2})
     end
 
     test "writes named mappings that span more than one address" do
@@ -2002,6 +2543,27 @@ defmodule ModBossTest do
       assert String.match?(message, ~r/Unknown mapping/i)
 
       assert {:ok, _encoded_values} = ModBoss.encode(schema, %{foo: 1, bar: 2})
+    end
+
+    test "skips encoding unsupported conditional mappings" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :bar, mode: :w, if: fn ctx -> ctx.supported end
+        end
+      end
+      """)
+
+      assert {:ok, %{{:holding_register, 1} => 10}} ==
+               ModBoss.encode(schema, %{foo: 10, bar: 20}, context: %{supported: false})
+
+      assert {:ok, %{{:holding_register, 1} => 10, {:holding_register, 2} => 20}} ==
+               ModBoss.encode(schema, %{foo: 10, bar: 20}, context: %{supported: true})
     end
   end
 

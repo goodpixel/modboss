@@ -14,6 +14,7 @@ defmodule ModBoss.Mapping do
           starting_address: address(),
           address_count: count(),
           as: atom() | {module(), atom()},
+          supported: boolean() | (map() -> boolean() | {false, any()}),
           value: any(),
           encoded_value: integer() | [integer()],
           mode: :r | :rw | :w,
@@ -26,6 +27,7 @@ defmodule ModBoss.Mapping do
     :starting_address,
     :address_count,
     :as,
+    :supported,
     :value,
     :encoded_value,
     :mode,
@@ -47,6 +49,7 @@ defmodule ModBoss.Mapping do
     as = Keyword.get(opts, :as) |> expand_as(module)
     mode = Keyword.get(opts, :mode, :r)
     gap_safe = Keyword.get_lazy(opts, :gap_safe, fn -> mode in [:r, :rw] end)
+    supported = Keyword.get(opts, :supported, true)
 
     opts =
       Keyword.merge(opts,
@@ -56,7 +59,8 @@ defmodule ModBoss.Mapping do
         starting_address: address_range.first,
         address_count: address_range.last - address_range.first + 1,
         as: as,
-        gap_safe: gap_safe
+        gap_safe: gap_safe,
+        supported: supported
       )
 
     __MODULE__
@@ -160,4 +164,49 @@ defmodule ModBoss.Mapping do
   @write_modes [:w, :rw]
   @doc false
   def writable?(%__MODULE__{} = mapping), do: mapping.mode in @write_modes
+
+  @doc """
+  Evaluates whether or not the `mapping` is supported given the `context`
+  """
+  def supported?(%__MODULE__{} = mapping, %{} = context) do
+    evaluate_support(mapping, context) == true
+  end
+
+  @doc false
+  def evaluate_support(%__MODULE__{supported: true}, _context), do: true
+  def evaluate_support(%__MODULE__{supported: false}, _context), do: false
+
+  def evaluate_support(%__MODULE__{supported: fun, name: name}, %{} = context)
+      when is_function(fun, 1) do
+    case fun.(context) do
+      true -> true
+      false -> false
+      {false, custom_value} -> {false, custom_value}
+      invalid -> raise_invalid_condition(name, context, invalid)
+    end
+  rescue
+    e in FunctionClauseError ->
+      f = Function.info(fun)
+
+      if e.module == f[:module] and e.function == f[:name] and e.arity == f[:arity] do
+        raise """
+        Conditional evaluation of `#{inspect(name)}` failed with no matching clause. \
+        Make sure your context always includes the necessary values for determining conditional \
+        support or include a fallback clause. Provided context was: #{inspect(context)}.
+        """
+      else
+        reraise e, __STACKTRACE__
+      end
+  end
+
+  defp raise_invalid_condition(name, context, return_value) do
+    raise """
+    Invalid return from conditional evaluation on mapping #{inspect(name)} with context: \
+    #{inspect(context)}.
+
+    Conditional mappings must return `true` for mappings that are supported for the given context \
+    and either `false` or `{false, custom_value}` for mappings that aren't supported. \
+    Got #{inspect(return_value)}.
+    """
+  end
 end

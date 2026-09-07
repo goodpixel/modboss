@@ -65,7 +65,8 @@ defmodule ModBoss do
       `{:error, _}` triggers a retry; exceptions are not retried.
     * `:context` — a map of arbitrary data that will be included in the
       `ModBoss.Encoding.Metadata` struct passed to decode functions (when using
-      2-arity decoders) and in telemetry event metadata. Defaults to `%{}`.
+      2-arity decoders) and in telemetry event metadata. Also passed to any
+      `:if` callbacks declared in the schema. Defaults to `%{}`.
       Useful for conditionally decoding values based on runtime information
       like firmware version or hardware revision, and for identifying which
       device or connection a request belongs to in telemetry handlers.
@@ -84,7 +85,8 @@ defmodule ModBoss do
   > A gap will only be bridged if **every** address within it belongs to a
   > known, gap-safe mapping (`gap_safe: true`, the default for readable mappings).
   > Unmapped addresses and mappings with `gap_safe: false` both prevent a gap
-  > from being bridged.
+  > from being bridged. Unsupported mappings (as determined by the `:if` option)
+  > are not considered gap safe.
   >
   > For example, given this schema:
   >
@@ -198,7 +200,11 @@ defmodule ModBoss do
           total_attempts: stats.total_attempts
         }
 
-        stop_metadata = Map.put(start_metadata, :result, result)
+        stop_metadata =
+          start_metadata
+          |> Map.put(:result, result)
+          |> Map.put(:unsupported, stats.unsupported)
+
         {result, stop_measurements, stop_metadata}
       end)
     end
@@ -210,19 +216,34 @@ defmodule ModBoss do
   end
 
   defp read_mappings(module, mappings, read_func, opts) do
+    requested_names = MapSet.new(mappings, & &1.name)
+    {supported, unsupported} = evaluate_unsupported(mappings, opts.context)
+
     {read_result, stats} =
-      mappings
-      |> chunk_mappings(module, :read, opts)
+      supported
+      |> chunk_mappings(module, :read, opts, requested_names)
       |> read_chunks(module, read_func, opts)
 
+    stats = Map.put(stats, :unsupported, Enum.map(unsupported, & &1.name))
+
     with {:ok, values} <- read_result,
-         {:ok, mappings} <- hydrate_values(mappings, values),
+         {:ok, mappings} <- hydrate_values(supported, values),
          {:ok, mappings} <- maybe_decode(mappings, opts) do
-      result = collect_results(mappings, opts)
+      result = collect_results(mappings ++ unsupported, opts)
       {result, stats}
     else
       {:error, _error} = result -> {result, stats}
     end
+  end
+
+  defp evaluate_unsupported(mappings, context) do
+    Enum.reduce(mappings, {[], []}, fn mapping, {supported, unsupported} ->
+      case Mapping.evaluate_support(mapping, context) do
+        true -> {[mapping | supported], unsupported}
+        false -> {supported, [%{mapping | value: nil, gap_safe: false} | unsupported]}
+        {false, value} -> {supported, [%{mapping | value: value, gap_safe: false} | unsupported]}
+      end
+    end)
   end
 
   defp read_chunks(chunks, module, read_func, opts) do
@@ -387,7 +408,9 @@ defmodule ModBoss do
   ## Opts
     * `:context` — a map of arbitrary data that will be included in the
       `ModBoss.Encoding.Metadata` struct passed to encode functions (when using
-      2-arity encoders). Defaults to `%{}`.
+      2-arity encoders) and passed to any `:if` callbacks declared in the schema for
+      determining runtime support of particular mappings. Defaults to `%{}`. Mappings
+      determined to be unsupported are skipped—neither encoded nor included in the result.
 
   ## Example
 
@@ -400,7 +423,8 @@ defmodule ModBoss do
 
     with {:ok, mappings} <- get_mappings(:any, module, get_keys(values)),
          mappings <- put_values(mappings, values),
-         {:ok, mappings} <- encode_mappings(mappings, opts.context) do
+         supported <- Enum.filter(mappings, &Mapping.supported?(&1, opts.context)),
+         {:ok, mappings} <- encode_mappings(supported, opts.context) do
       {:ok, flatten_encoded_values(mappings)}
     end
   end
@@ -462,7 +486,8 @@ defmodule ModBoss do
       `{:error, _}` triggers a retry; exceptions are not retried.
     * `:context` — a map of arbitrary data that will be included in the
       `ModBoss.Encoding.Metadata` struct passed to encode functions (when using
-      2-arity encoders) and in telemetry event metadata. Defaults to `%{}`.
+      2-arity encoders) and in telemetry event metadata. Also passed to any
+      `:if` callbacks declared in the schema. Defaults to `%{}`.
       Useful for conditionally encoding values based on runtime information
       like firmware version or hardware revision, and for identifying which
       device or connection a request belongs to in telemetry handlers.
@@ -484,8 +509,7 @@ defmodule ModBoss do
     opts = evaluate_write_opts(opts)
 
     with {:ok, mappings} <- get_mappings(:writable, module, names),
-         mappings <- put_values(mappings, values),
-         {:ok, mappings} <- encode_mappings(mappings, opts.context) do
+         mappings <- put_values(mappings, values) do
       do_writes(module, names, mappings, write_func, opts)
     end
   end
@@ -557,7 +581,11 @@ defmodule ModBoss do
           total_attempts: stats.total_attempts
         }
 
-        stop_metadata = Map.put(start_metadata, :result, result)
+        stop_metadata =
+          start_metadata
+          |> Map.put(:unsupported, stats.unsupported)
+          |> Map.put(:result, result)
+
         {result, stop_measurements, stop_metadata}
       end)
     end
@@ -569,10 +597,23 @@ defmodule ModBoss do
   end
 
   defp write_mappings(module, mappings, write_func, opts) do
+    {supported, unsupported} = Enum.split_with(mappings, &Mapping.supported?(&1, opts.context))
     initial_stats = %{objects: 0, batches: 0, total_attempts: 0}
 
-    mappings
-    |> chunk_mappings(module, :write, opts)
+    {write_result, stats} =
+      with {:ok, encoded} <- encode_mappings(supported, opts.context) do
+        encoded
+        |> chunk_mappings(module, :write, opts, MapSet.new(mappings, & &1.name))
+        |> write_chunks(module, write_func, initial_stats, opts)
+      else
+        {:error, error} -> {{:error, error}, initial_stats}
+      end
+
+    {write_result, Map.put(stats, :unsupported, Enum.map(unsupported, & &1.name))}
+  end
+
+  defp write_chunks(chunks, module, write_func, initial_stats, opts) do
+    chunks
     |> Enum.reduce_while({:ok, initial_stats}, fn chunk, {:ok, stats} ->
       {batched_mappings, _gap_addresses = 0, _largest_gap = 0} = chunk
       [first | _rest] = batched_mappings
@@ -590,9 +631,10 @@ defmodule ModBoss do
       {result, attempts} = wrapped_write.(first.type, first.starting_address, value_or_values)
 
       updated_stats = %{
-        objects: stats.objects + address_count,
-        batches: stats.batches + 1,
-        total_attempts: stats.total_attempts + attempts
+        stats
+        | objects: stats.objects + address_count,
+          batches: stats.batches + 1,
+          total_attempts: stats.total_attempts + attempts
       }
 
       case result do
@@ -651,14 +693,14 @@ defmodule ModBoss do
   defp validate!(%{context: c} = opts, :context) when is_map(c), do: opts
   defp validate!(opts, opt), do: raise("Invalid option #{inspect([{opt, opts[opt]}])}.")
 
-  @spec chunk_mappings([Mapping.t()], module(), :read | :write, map()) ::
+  @spec chunk_mappings([Mapping.t()], module(), :read | :write, map(), MapSet.t()) ::
           [{Mapping.object_type(), integer(), [any()]}]
-  defp chunk_mappings(mappings, module, mode, opts) do
+  defp chunk_mappings(mappings, module, mode, opts, requested_names) do
     initial_acc = {_mappings = [], _address_count = 0, _gap_address_count = 0, _largest_gap = 0}
 
     gap_safe_addresses =
       if mode == :read and Enum.any?(opts.max_gap, fn {_, size} -> size > 0 end) do
-        gap_safe_addresses(module)
+        gap_safe_addresses(module, mappings, requested_names, opts.context)
       else
         MapSet.new()
       end
@@ -714,14 +756,38 @@ defmodule ModBoss do
       allow_gap?(gap, current_mapping, gap_safe_addresses, opts)
   end
 
-  defp gap_safe_addresses(module) do
+  defp gap_safe_addresses(module, mappings, requested_names, context) do
+    bounds = address_bounds(mappings)
+
     module.__modboss_schema__()
     |> Map.values()
-    |> Enum.filter(& &1.gap_safe)
+    |> Enum.reject(&MapSet.member?(requested_names, &1.name))
+    |> Enum.filter(
+      &(&1.gap_safe and within_bounds?(&1, bounds) and Mapping.supported?(&1, context))
+    )
     |> Enum.flat_map(fn mapping ->
       mapping |> Mapping.address_range() |> Enum.map(&{mapping.type, &1})
     end)
     |> MapSet.new()
+  end
+
+  defp address_bounds(mappings) do
+    mappings
+    |> Enum.group_by(& &1.type, &Mapping.address_range/1)
+    |> Map.new(fn {type, ranges} ->
+      {type, Enum.min_by(ranges, & &1.first).first..Enum.max_by(ranges, & &1.last).last}
+    end)
+  end
+
+  defp within_bounds?(mapping, bounds) do
+    case Map.fetch(bounds, mapping.type) do
+      {:ok, range} ->
+        mapping_range = Mapping.address_range(mapping)
+        mapping_range.first <= range.last and mapping_range.last >= range.first
+
+      :error ->
+        false
+    end
   end
 
   defp allow_gap?(gap, current_mapping, gap_safe_addresses, opts) do
