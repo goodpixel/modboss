@@ -195,8 +195,6 @@ defmodule ModBoss do
           objects_requested: stats.objects,
           batches: stats.batches,
           addresses_read: stats.addresses,
-          gap_addresses_read: stats.gap_addresses,
-          largest_gap: stats.largest_gap,
           total_attempts: stats.total_attempts
         }
 
@@ -251,14 +249,12 @@ defmodule ModBoss do
       objects: 0,
       batches: 0,
       addresses: 0,
-      gap_addresses: 0,
-      largest_gap: 0,
       total_attempts: 0
     }
 
     initial = {{:ok, %{}}, initial_stats}
 
-    Enum.reduce_while(chunks, initial, fn {mappings, gap_addresses, largest_gap}, acc ->
+    Enum.reduce_while(chunks, initial, fn mappings, acc ->
       {{:ok, values}, stats} = acc
       [first | _rest] = mappings
       last = List.last(mappings)
@@ -270,15 +266,13 @@ defmodule ModBoss do
 
       {result, callback_attempts} =
         read_func
-        |> wrap_read_callback(module, gap_addresses, largest_gap, opts)
+        |> wrap_read_callback(module, opts)
         |> read_batch(first.type, starting_address, address_count)
 
       updated_stats = %{
         objects: stats.objects + object_count,
         batches: stats.batches + 1,
         addresses: stats.addresses + address_count,
-        gap_addresses: stats.gap_addresses + gap_addresses,
-        largest_gap: max(stats.largest_gap, largest_gap),
         total_attempts: stats.total_attempts + callback_attempts
       }
 
@@ -290,7 +284,7 @@ defmodule ModBoss do
   end
 
   if Code.ensure_loaded?(:telemetry) do
-    defp wrap_read_callback(read_func, module, gap_addresses, largest_gap, opts) do
+    defp wrap_read_callback(read_func, module, opts) do
       max_attempts = opts.max_attempts
 
       fn type, starting_address, address_count ->
@@ -307,7 +301,7 @@ defmodule ModBoss do
 
           :telemetry.span([:modboss, :read_callback], start_metadata, fn ->
             result = read_func.(type, starting_address, address_count)
-            stop_measurements = %{gap_addresses_read: gap_addresses, largest_gap: largest_gap}
+            stop_measurements = %{}
             stop_metadata = Map.put(start_metadata, :result, result)
 
             {result, stop_measurements, stop_metadata}
@@ -316,7 +310,7 @@ defmodule ModBoss do
       end
     end
   else
-    defp wrap_read_callback(read_func, _, _, _, opts) do
+    defp wrap_read_callback(read_func, _module, opts) do
       fn type, starting_address, address_count ->
         retry(opts.max_attempts, fn _attempt ->
           read_func.(type, starting_address, address_count)
@@ -615,8 +609,7 @@ defmodule ModBoss do
 
   defp write_chunks(chunks, module, write_func, initial_stats, opts) do
     chunks
-    |> Enum.reduce_while({:ok, initial_stats}, fn chunk, {:ok, stats} ->
-      {batched_mappings, _gap_addresses = 0, _largest_gap = 0} = chunk
+    |> Enum.reduce_while({:ok, initial_stats}, fn batched_mappings, {:ok, stats} ->
       [first | _rest] = batched_mappings
       values = Enum.flat_map(batched_mappings, &List.wrap(&1.encoded_value))
       address_count = length(values)
@@ -692,10 +685,11 @@ defmodule ModBoss do
   defp validate!(%{context: c} = opts, :context) when is_map(c), do: opts
   defp validate!(opts, opt), do: raise("Invalid option #{inspect([{opt, opts[opt]}])}.")
 
-  @spec chunk_mappings([Mapping.t()], module(), :read | :write, map(), MapSet.t()) ::
-          [{Mapping.object_type(), integer(), [any()]}]
+  @spec chunk_mappings([Mapping.t()], module(), :read | :write, map(), MapSet.t()) :: [
+          Mapping.t()
+        ]
   defp chunk_mappings(mappings, module, mode, opts, requested_names) do
-    initial_acc = {_mappings = [], _address_count = 0, _gap_address_count = 0, _largest_gap = 0}
+    initial_acc = {_mappings = [], _address_count = 0}
 
     gap_safe_addresses =
       if mode == :read and Enum.any?(opts.max_gap, fn {_, size} -> size > 0 end) do
@@ -712,29 +706,26 @@ defmodule ModBoss do
       end
 
       case acc do
-        {_mappings = [], _address_count = 0, _gap_address_count = 0, _largest_gap = 0} ->
-          {:cont, {[mapping], mapping.address_count, 0, 0}}
+        {_mappings = [], _address_count = 0} ->
+          {:cont, {[mapping], mapping.address_count}}
 
-        {[prior_mapping | _] = mappings, running_count, running_gap_count, largest_gap} ->
+        {[prior_mapping | _] = mappings, running_count} ->
           gap = Mapping.gap(prior_mapping, mapping)
           total_addresses = running_count + gap.size + mapping.address_count
 
           if total_addresses <= max_chunk and
                eligible_to_batch?(mode, prior_mapping, mapping, gap, gap_safe_addresses, opts) do
-            running_gap_count = running_gap_count + gap.size
-            largest_gap = max(largest_gap, gap.size)
-
-            {:cont, {[mapping | mappings], total_addresses, running_gap_count, largest_gap}}
+            {:cont, {[mapping | mappings], total_addresses}}
           else
-            chunk_to_emit = {Enum.reverse(mappings), running_gap_count, largest_gap}
-            new_chunk = {[mapping], mapping.address_count, 0, 0}
+            chunk_to_emit = Enum.reverse(mappings)
+            new_chunk = {[mapping], mapping.address_count}
             {:cont, chunk_to_emit, new_chunk}
           end
       end
     end
 
-    after_fun = fn {mappings, _address_count, gap_address_count, largest_gap} ->
-      {:cont, {Enum.reverse(mappings), gap_address_count, largest_gap}, :ignored}
+    after_fun = fn {mappings, _address_count} ->
+      {:cont, Enum.reverse(mappings), :ignored}
     end
 
     mappings
