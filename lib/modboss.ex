@@ -342,7 +342,7 @@ defmodule ModBoss do
         batch_results =
           values
           |> Enum.with_index(starting_address)
-          |> Enum.into(%{}, fn {value, address} -> {address, value} end)
+          |> Enum.into(%{}, fn {value, address} -> {{type, address}, value} end)
 
         {:ok, batch_results}
       end
@@ -353,11 +353,14 @@ defmodule ModBoss do
   defp hydrate_values(mappings, values) do
     Enum.map(mappings, fn
       %Mapping{address_count: 1} = mapping ->
-        encoded_value = Map.fetch!(values, mapping.starting_address)
+        encoded_value = Map.fetch!(values, {mapping.type, mapping.starting_address})
         %{mapping | encoded_value: encoded_value}
 
       %Mapping{address_count: _plural} = mapping ->
-        encoded_values = for addr <- Mapping.address_range(mapping), do: Map.fetch!(values, addr)
+        encoded_values =
+          for addr <- Mapping.address_range(mapping) do
+            Map.fetch!(values, {mapping.type, addr})
+          end
 
         %{mapping | encoded_value: encoded_values}
     end)
