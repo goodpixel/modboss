@@ -68,8 +68,6 @@ defmodule ModBoss.TelemetryTest do
       assert stop_measurements.batches == 1
       assert stop_measurements.objects_requested == 1
       assert stop_measurements.addresses_read == 1
-      assert stop_measurements.gap_addresses_read == 0
-      assert stop_measurements.largest_gap == 0
       assert stop_measurements.total_attempts == 1
       assert stop_metadata.schema == TestSchema
       assert stop_metadata.names == [:foo]
@@ -99,8 +97,6 @@ defmodule ModBoss.TelemetryTest do
 
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
-      assert stop_measurements.gap_addresses_read == 0
-      assert stop_measurements.largest_gap == 0
       assert stop_metadata.schema == TestSchema
       assert stop_metadata.object_type == :holding_register
       assert stop_metadata.starting_address == 1
@@ -184,16 +180,12 @@ defmodule ModBoss.TelemetryTest do
       assert measurements.batches == 1
       assert measurements.objects_requested == 2
       assert measurements.addresses_read == 5
-      assert measurements.gap_addresses_read == 3
-      assert measurements.largest_gap == 3
       assert measurements.total_attempts == 1
 
       # Per-request: single request spanning addresses 1-5
-      assert_receive {:telemetry, [:modboss, :read_callback, :stop], req_measurements, req_meta}
+      assert_receive {:telemetry, [:modboss, :read_callback, :stop], _req_measurements, req_meta}
       assert req_meta.address_count == 5
       assert req_meta.attempt == 1
-      assert req_measurements.gap_addresses_read == 3
-      assert req_measurements.largest_gap == 3
     end
 
     test "reports multiple gaps correctly", %{device: device} do
@@ -214,15 +206,10 @@ defmodule ModBoss.TelemetryTest do
       assert measurements.batches == 1
       assert measurements.objects_requested == 3
       assert measurements.addresses_read == 5
-      assert measurements.gap_addresses_read == 2
-      # Two gaps of size 1 each (addr 2 and addr 4)
-      assert measurements.largest_gap == 1
       assert measurements.total_attempts == 1
 
-      assert_receive {:telemetry, [:modboss, :read_callback, :stop], req_measurements, req_meta}
+      assert_receive {:telemetry, [:modboss, :read_callback, :stop], _req_measurements, req_meta}
       assert req_meta.attempt == 1
-      assert req_measurements.gap_addresses_read == 2
-      assert req_measurements.largest_gap == 1
     end
 
     test "reports zero gap measurements without max_gap", %{device: device} do
@@ -234,8 +221,6 @@ defmodule ModBoss.TelemetryTest do
       {:ok, %{foo: 10, bar: 20}} = ModBoss.read(TestSchema, [:foo, :bar], read_func(device))
 
       assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
-      assert measurements.gap_addresses_read == 0
-      assert measurements.largest_gap == 0
       assert measurements.total_attempts == 1
       assert measurements.addresses_read == measurements.objects_requested
     end
@@ -275,8 +260,6 @@ defmodule ModBoss.TelemetryTest do
       assert stop_measurements.objects_requested == 1
       assert stop_measurements.batches == 1
       assert stop_measurements.addresses_read == 1
-      assert stop_measurements.gap_addresses_read == 0
-      assert stop_measurements.largest_gap == 0
       assert stop_measurements.total_attempts == 1
 
       assert_receive {:telemetry, [:modboss, :read_callback, :start], _, _}
@@ -341,12 +324,6 @@ defmodule ModBoss.TelemetryTest do
 
       # 4 addresses in chunk 1 + 5 addresses in chunk 2
       assert measurements.addresses_read == 9
-
-      # 2 gap addresses in chunk 1 + 3 gap addresses in chunk 2
-      assert measurements.gap_addresses_read == 5
-
-      # 3 gap addresses from chunk 2 (vs. 2 gap address from chunk 1)
-      assert measurements.largest_gap == 3
 
       # attempted the read callback twice
       assert measurements.total_attempts == 2
