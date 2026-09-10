@@ -687,6 +687,43 @@ defmodule ModBossTest do
       assert 4 == get_read_count(device)
     end
 
+    test "allows the same addresses across different object types" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1..2, :holding_1
+
+          coil 1, :coil_1
+          coil 2, :coil_2
+
+          input_register 1, :input_1
+
+          discrete_input 1, :discrete_1
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 101,
+        {:holding_register, 2} => 102,
+        {:coil, 1} => 201,
+        {:coil, 2} => 202,
+        {:input_register, 1} => 301,
+        {:discrete_input, 1} => 401
+      })
+
+      names = [:holding_1, :coil_1, :coil_2, :input_1, :discrete_1]
+
+      {:ok, %{holding_1: [101, 102], coil_1: 201, coil_2: 202, input_1: 301, discrete_1: 401}} =
+        ModBoss.read(schema, names, read_func(device))
+    end
+
     test "raises an error if it doesn't get back the expected number of values" do
       device = start_supervised!({Agent, fn -> @initial_state end})
       encode_and_set(device, FakeSchema, foo: 1)
