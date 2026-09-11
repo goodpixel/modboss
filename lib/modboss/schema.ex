@@ -299,15 +299,14 @@ defmodule ModBoss.Schema do
     end
   end
 
-  @doc false
-  def validate_name!(%Macro.Env{file: file, line: line}, :all) do
+  defp validate_name!(%Macro.Env{file: file, line: line}, :all) do
     raise CompileError,
       file: file,
       line: line,
       description: "The name `:all` is reserved by ModBoss and cannot be used for a mapping."
   end
 
-  def validate_name!(_env, _name), do: :ok
+  defp validate_name!(_env, _name), do: :ok
 
   defp validate_if_ast!(env, name, {:fn, _, clauses}) do
     if Enum.any?(clauses, fn {:->, _, [args, _body]} -> fn_arity(args) != 1 end) do
