@@ -96,6 +96,15 @@ defmodule ModBoss.MappingTest do
     end
   end
 
+  describe "is_ordered/2" do
+    test "checks whether the starting address of `a` comes before that of `b`" do
+      a = Mapping.new(__MODULE__, :a, :holding_register, 1)
+      b = Mapping.new(__MODULE__, :b, :holding_register, 2)
+      assert Mapping.is_ordered(a, b)
+      refute Mapping.is_ordered(b, a)
+    end
+  end
+
   describe "is_adjacent/2" do
     test "true when same type and addresses are contiguous" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 1)

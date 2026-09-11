@@ -130,11 +130,16 @@ defmodule ModBoss.Mapping do
   end
 
   @doc """
-  Guard that checks whether two mappings are of the same type and occupy adjacent addresses.
+  Checks whether the starting address for `a` comes before `b`
+  """
+  defguard is_ordered(a, b) when a.starting_address < b.starting_address
+
+  @doc """
+  Checks whether two mappings are of the same type and `a` directly follows `b`
   """
   defguard is_adjacent(a, b)
-           when is_struct(a, __MODULE__) and is_struct(b, __MODULE__) and
-                  a.type == b.type and
+           when a.type == b.type and
+                  is_ordered(a, b) and
                   a.starting_address + a.address_count == b.starting_address
 
   @doc """
