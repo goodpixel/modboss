@@ -461,16 +461,10 @@ defmodule ModBoss.Schema do
 
       def __modboss_schema__, do: unquote(mappings_with_normalized_conditions)
 
-      @doc """
-      Address-to-name mappings grouped by modbus object type
-      """
       def __modboss_mapping_names__, do: unquote(addresses_to_names)
 
       @object_types [:holding_register, :input_register, :coil, :discrete_input]
 
-      @doc """
-      Address-to-name mappings for the given modbus object `type`
-      """
       def __modboss_mapping_names__(type) when type in @object_types do
         Map.get(__modboss_mapping_names__(), type, %{})
       end
