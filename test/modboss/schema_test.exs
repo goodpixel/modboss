@@ -2,6 +2,7 @@ defmodule ModBoss.SchemaTest do
   use ExUnit.Case, async: true
 
   alias ModBoss.Mapping
+  alias ModBoss.Schema
 
   defmodule ExampleSchema do
     use ModBoss.Schema
@@ -522,6 +523,81 @@ defmodule ModBoss.SchemaTest do
 
       assert is_nil(module.__modboss_mapping__(:holding_register, 2))
       assert is_nil(module.__modboss_mapping__(:discrete_input, 1))
+    end
+  end
+
+  describe "contiguous_mappings_between/3" do
+    setup do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1..3, :foo
+          holding_register 4, :bar, mode: :rw
+          holding_register 5..9, :baz, mode: :r
+          holding_register 10, :qux, mode: :w
+
+          holding_register 20, :quux, mode: :w
+          holding_register 21, :corge, mode: :w
+
+          input_register 11, :grault
+        end
+      end
+      """)
+
+      %{
+        module: module,
+        foo: mapping(module, :foo),
+        bar: mapping(module, :bar),
+        baz: mapping(module, :baz),
+        qux: mapping(module, :qux),
+        quux: mapping(module, :quux),
+        corge: mapping(module, :corge),
+        grault: mapping(module, :grault)
+      }
+    end
+
+    test "returns an ascending stream of contiguous mappings between any two mappings", ctx do
+      assert [] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.bar)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+
+      assert [:bar] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.baz)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+
+      assert [:bar, :baz] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.qux)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+
+      assert [:baz] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.bar, ctx.qux)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+
+      assert [] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.baz, ctx.qux)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+    end
+
+    test "aborts stream at first address with no registered mapping", ctx do
+      assert [:bar, :baz, :qux] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.corge)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+    end
+
+    test "requires mappings to be given in order", ctx do
+      assert_raise RuntimeError, ~r/in order of starting address/, fn ->
+        Schema.contiguous_mappings_between(ctx.module, ctx.quux, ctx.foo)
+      end
+    end
+
+    test "requires mappings to be the same type", ctx do
+      assert_raise RuntimeError, ~r/must be the same type/, fn ->
+        Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.grault)
+      end
     end
   end
 

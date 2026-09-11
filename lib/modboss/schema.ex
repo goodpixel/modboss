@@ -132,6 +132,7 @@ defmodule ModBoss.Schema do
       end
   """
 
+  require ModBoss.Mapping
   alias ModBoss.Mapping
 
   defmacro __using__(opts) do
@@ -245,6 +246,33 @@ defmodule ModBoss.Schema do
   """
   defmacro discrete_input(addresses, name, opts \\ []) do
     define_mapping(__CALLER__, :discrete_input, addresses, name, opts)
+  end
+
+  @doc """
+  Returns a stream of contiguous mappings from `a` up to `b`
+
+  Mapping `a` must have the lower address of the two, and the stream will
+  return mappings in ascending order, aborting when it reaches Mapping `b`
+  or if it reaches an address with no defined Mapping.
+  """
+  def contiguous_mappings_between(module, %Mapping{type: t} = a, %Mapping{type: t} = b)
+      when Mapping.is_ordered(a, b) do
+    Stream.unfold(a, fn prior ->
+      next_address = prior.starting_address + prior.address_count
+
+      if next_address < b.starting_address do
+        if mapping = module.__modboss_mapping__(t, next_address), do: {mapping, mapping}
+      end
+    end)
+  end
+
+  def contiguous_mappings_between(_module, %Mapping{} = a, %Mapping{} = b)
+      when not Mapping.is_ordered(a, b) do
+    raise "Mappings must be provided in order of starting address."
+  end
+
+  def contiguous_mappings_between(module, %Mapping{type: t1}, %Mapping{type: t2}) do
+    raise "Mappings must be the same type, got #{inspect(t1)} and #{inspect(t2)} in #{inspect(module)}."
   end
 
   defp define_mapping(caller, type, addresses, name, opts) do
