@@ -1,6 +1,8 @@
 defmodule ModBoss.SchemaTest do
   use ExUnit.Case, async: true
 
+  alias ModBoss.Mapping
+
   defmodule ExampleSchema do
     use ModBoss.Schema
 
@@ -395,8 +397,137 @@ defmodule ModBoss.SchemaTest do
     end
   end
 
+  describe "__modboss_mapping_names__/0" do
+    test "returns a map of address-to-Mapping lookups keyed by object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2..4, :bar
+          holding_register 100, :baz
+
+          input_register 1, :qux
+
+          coil 1, :quux
+
+          discrete_input 1, :corge
+        end
+      end
+      """)
+
+      assert module.__modboss_mapping_names__() == %{
+               holding_register: %{
+                 1 => :foo,
+                 2 => :bar,
+                 3 => :bar,
+                 4 => :bar,
+                 100 => :baz
+               },
+               input_register: %{
+                 1 => :qux
+               },
+               coil: %{
+                 1 => :quux
+               },
+               discrete_input: %{
+                 1 => :corge
+               }
+             }
+    end
+  end
+
+  describe "__modboss_mapping_names__/1" do
+    test "returns a map of address-to-Mapping lookups for the given object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1..2, :foo
+          input_register 1, :bar
+          coil 1, :baz
+          discrete_input 1, :qux
+        end
+      end
+      """)
+
+      assert module.__modboss_mapping_names__(:holding_register) == %{1 => :foo, 2 => :foo}
+      assert module.__modboss_mapping_names__(:input_register) == %{1 => :bar}
+      assert module.__modboss_mapping_names__(:coil) == %{1 => :baz}
+      assert module.__modboss_mapping_names__(:discrete_input) == %{1 => :qux}
+    end
+
+    test "returns an empty map if there are no registered mappings for the object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+        end
+      end
+      """)
+
+      assert module.__modboss_mapping_names__(:input_register) == %{}
+    end
+  end
+
+  describe "__modboss_mapping__/2" do
+    test "returns the name of the ModBoss.Mapping for the given modbus object type/address" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1..2, :foo
+          input_register 1, :bar
+          coil 1, :baz
+          discrete_input 1, :qux
+        end
+      end
+      """)
+
+      assert %Mapping{name: :foo} = module.__modboss_mapping__(:holding_register, 1)
+      assert %Mapping{name: :foo} = module.__modboss_mapping__(:holding_register, 2)
+
+      assert %Mapping{name: :bar} = module.__modboss_mapping__(:input_register, 1)
+
+      assert %Mapping{name: :baz} = module.__modboss_mapping__(:coil, 1)
+
+      assert %Mapping{name: :qux} = module.__modboss_mapping__(:discrete_input, 1)
+    end
+
+    test "returns nil if no ModBoss.Mapping exists for the given modbus object type/address" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+        end
+      end
+      """)
+
+      assert is_nil(module.__modboss_mapping__(:holding_register, 2))
+      assert is_nil(module.__modboss_mapping__(:discrete_input, 1))
+    end
+  end
+
   defp unique_module do
-    "#{__MODULE__}#{System.unique_integer([:positive])}"
+    name = "#{__MODULE__}#{System.unique_integer([:positive])}"
+    Module.concat([name])
   end
 
   defp mapping(module, name) do

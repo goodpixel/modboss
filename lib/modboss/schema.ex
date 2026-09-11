@@ -404,6 +404,21 @@ defmodule ModBoss.Schema do
         end
       end)
 
+    addresses_to_names =
+      mappings
+      |> Enum.group_by(& &1.type)
+      |> Enum.into(%{}, fn {type, mappings_for_type} ->
+        addresses_to_names =
+          Enum.reduce(mappings_for_type, %{}, fn %Mapping{} = mapping, acc ->
+            mapping
+            |> Mapping.address_range()
+            |> Enum.into(acc, fn address -> {address, mapping.name} end)
+          end)
+
+        {type, addresses_to_names}
+      end)
+      |> Macro.escape()
+
     Module.delete_attribute(env.module, :modboss_mappings)
     Module.delete_attribute(env.module, :modboss_mapping_support)
 
@@ -417,6 +432,29 @@ defmodule ModBoss.Schema do
       def __max_batch__(:write, :coil), do: unquote(max_coil_writes)
 
       def __modboss_schema__, do: unquote(mappings_with_normalized_conditions)
+
+      @doc """
+      Address-to-name mappings grouped by modbus object type
+      """
+      def __modboss_mapping_names__, do: unquote(addresses_to_names)
+
+      @object_types [:holding_register, :input_register, :coil, :discrete_input]
+
+      @doc """
+      Address-to-name mappings for the given modbus object `type`
+      """
+      def __modboss_mapping_names__(type) when type in @object_types do
+        Map.get(__modboss_mapping_names__(), type, %{})
+      end
+
+      @doc """
+      Returns the `ModBoss.Mapping` for the given modbus object `type` and `address`
+      """
+      def __modboss_mapping__(type, address) when type in @object_types and is_integer(address) do
+        if name = __modboss_mapping_names__(type)[address] do
+          Map.fetch!(__modboss_schema__(), name)
+        end
+      end
     end
   end
 
