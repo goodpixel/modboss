@@ -15,6 +15,7 @@ defmodule ModBoss.Mapping do
           address_count: count(),
           as: atom() | {module(), atom()},
           supported: boolean() | (map() -> boolean() | {false, any()}),
+          requested: boolean(),
           value: any(),
           encoded_value: integer() | [integer()],
           mode: :r | :rw | :w,
@@ -28,6 +29,7 @@ defmodule ModBoss.Mapping do
     :address_count,
     :as,
     :supported,
+    :requested,
     :value,
     :encoded_value,
     :mode,
@@ -60,7 +62,8 @@ defmodule ModBoss.Mapping do
         address_count: address_range.last - address_range.first + 1,
         as: as,
         gap_safe: gap_safe,
-        supported: supported
+        supported: supported,
+        requested: false
       )
 
     __MODULE__
@@ -143,23 +146,18 @@ defmodule ModBoss.Mapping do
                   a.starting_address + a.address_count == b.starting_address
 
   @doc """
-  Returns a map describing the gap between two mappings of the same type.
+  Returns the number of addresses between two mappings.
 
-  Returns `%{size: integer(), addresses: MapSet.t()}` where `addresses` contains
-  `{type, address}` pairs for each address in the gap.
+  Returns `{:error, :disparate_types}` if the mappings aren't the same type.
   """
-  def gap(%__MODULE__{} = a, %__MODULE__{} = b) when is_adjacent(a, b) do
-    %{size: 0, addresses: MapSet.new()}
+  def gap_size(%__MODULE__{} = a, %__MODULE__{} = b) when is_adjacent(a, b), do: 0
+
+  def gap_size(%__MODULE__{type: t} = a, %__MODULE__{type: t} = b) when is_ordered(a, b) do
+    b.starting_address - (a.starting_address + a.address_count)
   end
 
-  def gap(%__MODULE__{type: type} = a, %__MODULE__{type: type} = b)
-      when a.starting_address < b.starting_address do
-    gap_start = a.starting_address + a.address_count
-
-    %{
-      size: b.starting_address - gap_start,
-      addresses: MapSet.new(gap_start..(b.starting_address - 1)//1, &{type, &1})
-    }
+  def gap_size(%__MODULE__{type: t1}, %__MODULE__{type: t2}) when t1 != t2 do
+    {:error, :disparate_types}
   end
 
   @read_modes [:r, :rw]
@@ -174,19 +172,22 @@ defmodule ModBoss.Mapping do
   Evaluates whether or not the `mapping` is supported given the `context`
   """
   def supported?(%__MODULE__{} = mapping, %{} = context) do
-    evaluate_support(mapping, context) == true
+    evaluate_support(mapping, context).supported == true
   end
 
   @doc false
-  def evaluate_support(%__MODULE__{supported: true}, _context), do: true
-  def evaluate_support(%__MODULE__{supported: false}, _context), do: false
+  def evaluate_support(%__MODULE__{supported: true} = mapping, _), do: mapping
 
-  def evaluate_support(%__MODULE__{supported: fun, name: name}, %{} = context)
+  def evaluate_support(%__MODULE__{supported: false} = mapping, _) do
+    %{mapping | gap_safe: false}
+  end
+
+  def evaluate_support(%__MODULE__{supported: fun, name: name} = mapping, %{} = context)
       when is_function(fun, 1) do
     case fun.(context) do
-      true -> true
-      false -> false
-      {false, custom_value} -> {false, custom_value}
+      true -> %{mapping | supported: true}
+      false -> %{mapping | supported: false, gap_safe: false}
+      {false, custom_value} -> %{mapping | supported: false, value: custom_value, gap_safe: false}
       invalid -> raise_invalid_condition(name, context, invalid)
     end
   rescue

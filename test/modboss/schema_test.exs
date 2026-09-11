@@ -482,7 +482,7 @@ defmodule ModBoss.SchemaTest do
   end
 
   describe "__modboss_mapping__/2" do
-    test "returns the name of the ModBoss.Mapping for the given modbus object type/address" do
+    test "returns the ModBoss.Mapping for the given modbus object type/address" do
       module = unique_module()
 
       Code.compile_string("""
@@ -500,11 +500,8 @@ defmodule ModBoss.SchemaTest do
 
       assert %Mapping{name: :foo} = module.__modboss_mapping__(:holding_register, 1)
       assert %Mapping{name: :foo} = module.__modboss_mapping__(:holding_register, 2)
-
       assert %Mapping{name: :bar} = module.__modboss_mapping__(:input_register, 1)
-
       assert %Mapping{name: :baz} = module.__modboss_mapping__(:coil, 1)
-
       assert %Mapping{name: :qux} = module.__modboss_mapping__(:discrete_input, 1)
     end
 

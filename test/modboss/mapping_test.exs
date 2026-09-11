@@ -137,43 +137,29 @@ defmodule ModBoss.MappingTest do
     end
   end
 
-  describe "gap/2" do
-    test "returns size 0 and empty addresses for adjacent mappings" do
+  describe "gap_size/2" do
+    test "returns size 0 for adjacent mappings" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 1)
       b = Mapping.new(__MODULE__, :b, :holding_register, 2)
-      assert %{size: 0, addresses: addresses} = Mapping.gap(a, b)
-      assert MapSet.size(addresses) == 0
+      assert 0 = Mapping.gap_size(a, b)
     end
 
     test "returns the correct size and addresses for a gap" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 1)
       b = Mapping.new(__MODULE__, :b, :holding_register, 5)
-      assert %{size: 3, addresses: addresses} = Mapping.gap(a, b)
-
-      assert addresses ==
-               MapSet.new([
-                 {:holding_register, 2},
-                 {:holding_register, 3},
-                 {:holding_register, 4}
-               ])
+      assert 3 = Mapping.gap_size(a, b)
     end
 
     test "raises when types differ" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 1)
       b = Mapping.new(__MODULE__, :b, :input_register, 2)
-
-      assert_raise FunctionClauseError, fn ->
-        Mapping.gap(a, b)
-      end
+      assert {:error, :disparate_types} = Mapping.gap_size(a, b)
     end
 
     test "works with multi-address mappings" do
       a = Mapping.new(__MODULE__, :a, :holding_register, 1..3)
       b = Mapping.new(__MODULE__, :b, :holding_register, 6)
-      assert %{size: 2, addresses: addresses} = Mapping.gap(a, b)
-
-      assert addresses ==
-               MapSet.new([{:holding_register, 4}, {:holding_register, 5}])
+      assert 2 = Mapping.gap_size(a, b)
     end
   end
 

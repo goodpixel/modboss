@@ -177,6 +177,35 @@ defmodule ModBossTest do
                ModBoss.read(schema, [:foo, :baz], read_func(device), max_gap: 10)
     end
 
+    test "gap reads do not include the gap mappings in the final results" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2, :bar, gap_safe: true
+          holding_register 3, :baz
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      set_objects(device, %{
+        {:holding_register, 1} => 11,
+        {:holding_register, 2} => 22,
+        {:holding_register, 3} => 33
+      })
+
+      assert {:ok, %{foo: 11, baz: 33}} ==
+               ModBoss.read(schema, [:foo, :baz], read_func(device), max_gap: 10)
+
+      assert 1 = get_read_count(device)
+    end
+
     test "only evaluates `:if` once for supported mappings" do
       schema = unique_module()
 
@@ -686,12 +715,12 @@ defmodule ModBossTest do
         schema do
           holding_register 1..2, :holding_1
 
-          coil 101, :coil_1
-          coil 102, :coil_2
+          coil 1, :coil_1
+          coil 2, :coil_2
 
-          input_register 201, :input_1
+          input_register 1, :input_1
 
-          discrete_input 301, :discrete_1
+          discrete_input 1, :discrete_1
         end
       end
       """)
@@ -699,17 +728,17 @@ defmodule ModBossTest do
       device = start_supervised!({Agent, fn -> @initial_state end})
 
       set_objects(device, %{
-        {:holding_register, 1} => 1,
-        {:holding_register, 2} => 2,
-        {:coil, 101} => 101,
-        {:coil, 102} => 102,
-        {:input_register, 201} => 201,
-        {:discrete_input, 301} => 301
+        {:holding_register, 1} => 101,
+        {:holding_register, 2} => 102,
+        {:coil, 1} => 201,
+        {:coil, 2} => 202,
+        {:input_register, 1} => 301,
+        {:discrete_input, 1} => 401
       })
 
       names = [:holding_1, :coil_1, :coil_2, :input_1, :discrete_1]
 
-      {:ok, %{holding_1: [1, 2], coil_1: 101, coil_2: 102, input_1: 201, discrete_1: 301}} =
+      {:ok, %{holding_1: [101, 102], coil_1: 201, coil_2: 202, input_1: 301, discrete_1: 401}} =
         ModBoss.read(schema, names, read_func(device))
 
       assert 4 == get_read_count(device)
@@ -1439,7 +1468,7 @@ defmodule ModBossTest do
 
         schema do
           holding_register 0..1, :group_1
-          holding_register 2..3, :latch, gap_safe: false
+          holding_register 2..3, :skip, gap_safe: false
           holding_register 4..5, :group_2
         end
       end
@@ -1582,8 +1611,8 @@ defmodule ModBossTest do
       # Write-only mapping in the gap means the gap can't be bridged as a single read
       {:ok, result} = ModBoss.read(schema, [:group_1, :group_2], read_func(device), max_gap: 4)
 
-      assert 2 = get_read_count(device)
       assert %{group_1: [0, 1], group_2: [4, 5]} = result
+      assert 2 = get_read_count(device)
     end
 
     test "debug mode returns a map of mapping details for a singular read" do
