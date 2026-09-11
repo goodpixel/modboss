@@ -1,6 +1,9 @@
 defmodule ModBoss.SchemaTest do
   use ExUnit.Case, async: true
 
+  alias ModBoss.Mapping
+  alias ModBoss.Schema
+
   defmodule ExampleSchema do
     use ModBoss.Schema
 
@@ -395,8 +398,209 @@ defmodule ModBoss.SchemaTest do
     end
   end
 
+  describe "__modboss_mapping_names__/0" do
+    test "returns a map of address-to-Mapping lookups keyed by object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+          holding_register 2..4, :bar
+          holding_register 100, :baz
+
+          input_register 1, :qux
+
+          coil 1, :quux
+
+          discrete_input 1, :corge
+        end
+      end
+      """)
+
+      assert module.__modboss_mapping_names__() == %{
+               holding_register: %{
+                 1 => :foo,
+                 2 => :bar,
+                 3 => :bar,
+                 4 => :bar,
+                 100 => :baz
+               },
+               input_register: %{
+                 1 => :qux
+               },
+               coil: %{
+                 1 => :quux
+               },
+               discrete_input: %{
+                 1 => :corge
+               }
+             }
+    end
+  end
+
+  describe "__modboss_mapping_names__/1" do
+    test "returns a map of address-to-Mapping lookups for the given object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1..2, :foo
+          input_register 1, :bar
+          coil 1, :baz
+          discrete_input 1, :qux
+        end
+      end
+      """)
+
+      assert module.__modboss_mapping_names__(:holding_register) == %{1 => :foo, 2 => :foo}
+      assert module.__modboss_mapping_names__(:input_register) == %{1 => :bar}
+      assert module.__modboss_mapping_names__(:coil) == %{1 => :baz}
+      assert module.__modboss_mapping_names__(:discrete_input) == %{1 => :qux}
+    end
+
+    test "returns an empty map if there are no registered mappings for the object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+        end
+      end
+      """)
+
+      assert module.__modboss_mapping_names__(:input_register) == %{}
+    end
+  end
+
+  describe "__modboss_mapping__/2" do
+    test "returns the ModBoss.Mapping for the given modbus object type/address" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1..2, :foo
+          input_register 1, :bar
+          coil 1, :baz
+          discrete_input 1, :qux
+        end
+      end
+      """)
+
+      assert %Mapping{name: :foo} = module.__modboss_mapping__(:holding_register, 1)
+      assert %Mapping{name: :foo} = module.__modboss_mapping__(:holding_register, 2)
+      assert %Mapping{name: :bar} = module.__modboss_mapping__(:input_register, 1)
+      assert %Mapping{name: :baz} = module.__modboss_mapping__(:coil, 1)
+      assert %Mapping{name: :qux} = module.__modboss_mapping__(:discrete_input, 1)
+    end
+
+    test "returns nil if no ModBoss.Mapping exists for the given modbus object type/address" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1, :foo
+        end
+      end
+      """)
+
+      assert is_nil(module.__modboss_mapping__(:holding_register, 2))
+      assert is_nil(module.__modboss_mapping__(:discrete_input, 1))
+    end
+  end
+
+  describe "contiguous_mappings_between/3" do
+    setup do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1..3, :foo
+          holding_register 4, :bar, mode: :rw
+          holding_register 5..9, :baz, mode: :r
+          holding_register 10, :qux, mode: :w
+
+          holding_register 20, :quux, mode: :w
+          holding_register 21, :corge, mode: :w
+
+          input_register 11, :grault
+        end
+      end
+      """)
+
+      %{
+        module: module,
+        foo: mapping(module, :foo),
+        bar: mapping(module, :bar),
+        baz: mapping(module, :baz),
+        qux: mapping(module, :qux),
+        quux: mapping(module, :quux),
+        corge: mapping(module, :corge),
+        grault: mapping(module, :grault)
+      }
+    end
+
+    test "returns an ascending stream of contiguous mappings between any two mappings", ctx do
+      assert [] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.bar)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+
+      assert [:bar] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.baz)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+
+      assert [:bar, :baz] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.qux)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+
+      assert [:baz] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.bar, ctx.qux)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+
+      assert [] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.baz, ctx.qux)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+    end
+
+    test "aborts stream at first address with no registered mapping", ctx do
+      assert [:bar, :baz, :qux] =
+               Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.corge)
+               |> Enum.map(fn %Mapping{name: name} -> name end)
+    end
+
+    test "requires mappings to be given in order", ctx do
+      assert_raise RuntimeError, ~r/in order of starting address/, fn ->
+        Schema.contiguous_mappings_between(ctx.module, ctx.quux, ctx.foo)
+      end
+    end
+
+    test "requires mappings to be the same type", ctx do
+      assert_raise RuntimeError, ~r/must be the same type/, fn ->
+        Schema.contiguous_mappings_between(ctx.module, ctx.foo, ctx.grault)
+      end
+    end
+  end
+
   defp unique_module do
-    "#{__MODULE__}#{System.unique_integer([:positive])}"
+    name = "#{__MODULE__}#{System.unique_integer([:positive])}"
+    Module.concat([name])
   end
 
   defp mapping(module, name) do

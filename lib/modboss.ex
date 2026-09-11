@@ -12,8 +12,10 @@ defmodule ModBoss do
   """
 
   require Logger
+  import ModBoss.Mapping, only: [is_adjacent: 2]
+
   alias ModBoss.Mapping
-  import Mapping, only: [is_adjacent: 2]
+  alias ModBoss.Schema
 
   @typep mode :: :readable | :writable | :any
 
@@ -214,34 +216,80 @@ defmodule ModBoss do
   end
 
   defp read_mappings(module, mappings, read_func, opts) do
-    requested_names = MapSet.new(mappings, & &1.name)
-    {supported, unsupported} = evaluate_unsupported(mappings, opts.context)
+    mappings =
+      mappings
+      |> Enum.sort_by(&{&1.type, &1.starting_address})
+      |> evaluate_support(opts.context)
+      |> fill_gaps(module, opts)
+
+    requested_mappings = Enum.filter(mappings, & &1.requested)
+    {supported, unsupported} = Enum.split_with(mappings, & &1.supported)
 
     {read_result, stats} =
       supported
-      |> chunk_mappings(module, :read, opts, requested_names)
+      |> chunk_mappings(module, :read)
       |> read_chunks(module, read_func, opts)
 
     stats = Map.put(stats, :unsupported, Enum.map(unsupported, & &1.name))
 
     with {:ok, values} <- read_result,
-         {:ok, mappings} <- hydrate_values(supported, values),
-         {:ok, mappings} <- maybe_decode(mappings, opts) do
-      result = collect_results(mappings ++ unsupported, opts)
+         {:ok, mappings_with_encoded_values} <- hydrate_values(requested_mappings, values),
+         {:ok, mappings_with_decoded_values} <- maybe_decode(mappings_with_encoded_values, opts) do
+      result = collect_results(mappings_with_decoded_values, opts)
       {result, stats}
     else
       {:error, _error} = result -> {result, stats}
     end
   end
 
-  defp evaluate_unsupported(mappings, context) do
-    Enum.reduce(mappings, {[], []}, fn mapping, {supported, unsupported} ->
-      case Mapping.evaluate_support(mapping, context) do
-        true -> {[mapping | supported], unsupported}
-        false -> {supported, [%{mapping | value: nil, gap_safe: false} | unsupported]}
-        {false, value} -> {supported, [%{mapping | value: value, gap_safe: false} | unsupported]}
-      end
+  defp evaluate_support(mappings, context) when is_list(mappings) and is_map(context) do
+    Enum.map(mappings, &Mapping.evaluate_support(&1, context))
+  end
+
+  defguardp is_gap_eligible(prior_mapping, mapping)
+            when mapping.type == prior_mapping.type and
+                   mapping.supported and prior_mapping.supported
+
+  defp fill_gaps(mappings, module, opts) do
+    Enum.reduce(mappings, [], fn
+      mapping, [prior_mapping | _] = acc when is_adjacent(prior_mapping, mapping) ->
+        [mapping | acc]
+
+      mapping, [prior_mapping | _] = acc when is_gap_eligible(prior_mapping, mapping) ->
+        if Mapping.gap_size(prior_mapping, mapping) <= Map.fetch!(opts.max_gap, mapping.type) do
+          try_gap_fill(module, acc, mapping, opts.context)
+        else
+          [mapping | acc]
+        end
+
+      mapping, acc ->
+        [mapping | acc]
     end)
+    |> Enum.reverse()
+  end
+
+  defp try_gap_fill(module, [prior_mapping | _] = mappings, next_mapping, context) do
+    gap_mappings =
+      module
+      |> Schema.contiguous_mappings_between(prior_mapping, next_mapping)
+      |> Stream.map(&Mapping.evaluate_support(&1, context))
+      |> Enum.take_while(fn
+        %Mapping{gap_safe: true, supported: true} -> true
+        %Mapping{} -> false
+      end)
+
+    next_address_after_gap =
+      if final_gap_mapping = List.last(gap_mappings) do
+        final_gap_mapping.starting_address + final_gap_mapping.address_count
+      end
+
+    # If we can completely fill the gap, do so; otherwise don't include the gap mappings
+    if next_address_after_gap == next_mapping.starting_address do
+      mappings = Enum.reduce(gap_mappings, mappings, fn mapping, acc -> [mapping | acc] end)
+      [next_mapping | mappings]
+    else
+      [next_mapping | mappings]
+    end
   end
 
   defp read_chunks(chunks, module, read_func, opts) do
@@ -262,7 +310,7 @@ defmodule ModBoss do
       starting_address = first.starting_address
       ending_address = last.starting_address + last.address_count - 1
       address_count = ending_address - starting_address + 1
-      object_count = Enum.sum_by(mappings, & &1.address_count)
+      object_count = Enum.sum_by(mappings, &if(&1.requested, do: &1.address_count, else: 0))
 
       {result, callback_attempts} =
         read_func
@@ -346,17 +394,20 @@ defmodule ModBoss do
 
   defp hydrate_values(mappings, values) do
     Enum.map(mappings, fn
-      %Mapping{address_count: 1} = mapping ->
+      %Mapping{supported: true, address_count: 1} = mapping ->
         encoded_value = Map.fetch!(values, {mapping.type, mapping.starting_address})
         %{mapping | encoded_value: encoded_value}
 
-      %Mapping{address_count: _plural} = mapping ->
+      %Mapping{supported: true, address_count: _plural} = mapping ->
         encoded_values =
           for addr <- Mapping.address_range(mapping) do
             Map.fetch!(values, {mapping.type, addr})
           end
 
         %{mapping | encoded_value: encoded_values}
+
+      %Mapping{supported: false} = mapping ->
+        mapping
     end)
     |> then(&{:ok, &1})
   end
@@ -418,8 +469,8 @@ defmodule ModBoss do
 
     with {:ok, mappings} <- get_mappings(:any, module, get_keys(values)),
          mappings <- put_values(mappings, values),
-         supported <- Enum.filter(mappings, &Mapping.supported?(&1, opts.context)),
-         {:ok, mappings} <- encode_mappings(supported, opts.context) do
+         mappings <- Enum.filter(mappings, &Mapping.supported?(&1, opts.context)),
+         {:ok, mappings} <- encode_mappings(mappings, opts.context) do
       {:ok, flatten_encoded_values(mappings)}
     end
   end
@@ -556,7 +607,8 @@ defmodule ModBoss do
         {:error, "ModBoss Mapping(s) #{names} in #{inspect(module)} are not writable."}
 
       true ->
-        {:ok, mappings}
+        requested_mappings = Enum.map(mappings, &%{&1 | requested: true})
+        {:ok, requested_mappings}
     end
   end
 
@@ -592,13 +644,15 @@ defmodule ModBoss do
   end
 
   defp write_mappings(module, mappings, write_func, opts) do
-    {supported, unsupported} = Enum.split_with(mappings, &Mapping.supported?(&1, opts.context))
+    mappings = evaluate_support(mappings, opts.context)
+    {supported, unsupported} = Enum.split_with(mappings, & &1.supported)
     initial_stats = %{objects: 0, batches: 0, total_attempts: 0}
 
     {write_result, stats} =
       with {:ok, encoded} <- encode_mappings(supported, opts.context) do
         encoded
-        |> chunk_mappings(module, :write, opts, MapSet.new(mappings, & &1.name))
+        |> Enum.sort_by(& &1.starting_address)
+        |> chunk_mappings(module, :write)
         |> write_chunks(module, write_func, initial_stats, opts)
       else
         {:error, error} -> {{:error, error}, initial_stats}
@@ -685,43 +739,33 @@ defmodule ModBoss do
   defp validate!(%{context: c} = opts, :context) when is_map(c), do: opts
   defp validate!(opts, opt), do: raise("Invalid option #{inspect([{opt, opts[opt]}])}.")
 
-  @spec chunk_mappings([Mapping.t()], module(), :read | :write, map(), MapSet.t()) :: [
-          Mapping.t()
-        ]
-  defp chunk_mappings(mappings, module, mode, opts, requested_names) do
+  @spec chunk_mappings([Mapping.t()], module(), :read | :write) :: [Mapping.t()]
+  defp chunk_mappings(mappings, module, mode) do
     initial_acc = {_mappings = [], _address_count = 0}
 
-    gap_safe_addresses =
-      if mode == :read and Enum.any?(opts.max_gap, fn {_, size} -> size > 0 end) do
-        gap_safe_addresses(module, mappings, requested_names, opts.context)
-      else
-        MapSet.new()
-      end
+    chunk_fun = fn
+      %Mapping{supported: true} = mapping, acc ->
+        max_chunk = module.__max_batch__(mode, mapping.type)
 
-    chunk_fun = fn %Mapping{} = mapping, acc ->
-      max_chunk = module.__max_batch__(mode, mapping.type)
+        if mapping.address_count > max_chunk do
+          raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
+        end
 
-      if mapping.address_count > max_chunk do
-        raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
-      end
+        case acc do
+          {_mappings = [], _running_count = 0} ->
+            {:cont, {[mapping], mapping.address_count}}
 
-      case acc do
-        {_mappings = [], _address_count = 0} ->
-          {:cont, {[mapping], mapping.address_count}}
+          {[prior_mapping | _] = mappings, running_count} ->
+            total_addresses = running_count + mapping.address_count
 
-        {[prior_mapping | _] = mappings, running_count} ->
-          gap = Mapping.gap(prior_mapping, mapping)
-          total_addresses = running_count + gap.size + mapping.address_count
-
-          if total_addresses <= max_chunk and
-               eligible_to_batch?(mode, prior_mapping, mapping, gap, gap_safe_addresses, opts) do
-            {:cont, {[mapping | mappings], total_addresses}}
-          else
-            chunk_to_emit = Enum.reverse(mappings)
-            new_chunk = {[mapping], mapping.address_count}
-            {:cont, chunk_to_emit, new_chunk}
-          end
-      end
+            if total_addresses <= max_chunk and Mapping.is_adjacent(prior_mapping, mapping) do
+              {:cont, {[mapping | mappings], total_addresses}}
+            else
+              chunk_to_emit = Enum.reverse(mappings)
+              new_chunk = {[mapping], mapping.address_count}
+              {:cont, chunk_to_emit, new_chunk}
+            end
+        end
     end
 
     after_fun = fn {mappings, _address_count} ->
@@ -732,57 +776,8 @@ defmodule ModBoss do
     |> Enum.group_by(& &1.type)
     |> Enum.flat_map(fn {_type, mappings_for_type} ->
       mappings_for_type
-      |> Enum.sort_by(& &1.starting_address)
       |> Enum.chunk_while(initial_acc, chunk_fun, after_fun)
     end)
-  end
-
-  defp eligible_to_batch?(:write, prior_mapping, current_mapping, _gap, _safe_addresses, _opts) do
-    is_adjacent(prior_mapping, current_mapping)
-  end
-
-  defp eligible_to_batch?(:read, prior_mapping, current_mapping, gap, gap_safe_addresses, opts) do
-    is_adjacent(prior_mapping, current_mapping) or
-      allow_gap?(gap, current_mapping, gap_safe_addresses, opts)
-  end
-
-  defp gap_safe_addresses(module, mappings, requested_names, context) do
-    bounds = address_bounds(mappings)
-
-    module.__modboss_schema__()
-    |> Map.values()
-    |> Enum.reject(&MapSet.member?(requested_names, &1.name))
-    |> Enum.filter(
-      &(&1.gap_safe and within_bounds?(&1, bounds) and Mapping.supported?(&1, context))
-    )
-    |> Enum.flat_map(fn mapping ->
-      mapping |> Mapping.address_range() |> Enum.map(&{mapping.type, &1})
-    end)
-    |> MapSet.new()
-  end
-
-  defp address_bounds(mappings) do
-    mappings
-    |> Enum.group_by(& &1.type, &Mapping.address_range/1)
-    |> Map.new(fn {type, ranges} ->
-      {type, Enum.min_by(ranges, & &1.first).first..Enum.max_by(ranges, & &1.last).last}
-    end)
-  end
-
-  defp within_bounds?(mapping, bounds) do
-    case Map.fetch(bounds, mapping.type) do
-      {:ok, range} ->
-        mapping_range = Mapping.address_range(mapping)
-        mapping_range.first <= range.last and mapping_range.last >= range.first
-
-      :error ->
-        false
-    end
-  end
-
-  defp allow_gap?(gap, current_mapping, gap_safe_addresses, opts) do
-    max_gap = Map.fetch!(opts.max_gap, current_mapping.type)
-    gap.size <= max_gap and MapSet.subset?(gap.addresses, gap_safe_addresses)
   end
 
   @default_max_gap 0
@@ -872,22 +867,26 @@ defmodule ModBoss do
   defp maybe_decode(mappings, %{decode: false}), do: {:ok, mappings}
 
   defp maybe_decode(mappings, %{decode: true} = opts) do
-    Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
-      case decode_value(mapping, opts.context) do
-        {:ok, decoded_value} ->
-          updated_mapping = %{mapping | value: decoded_value}
-          {:cont, {:ok, [updated_mapping | acc]}}
+    Enum.reduce_while(mappings, {:ok, []}, fn
+      %{requested: true, supported: true} = mapping, {:ok, acc} ->
+        case decode_value(mapping, opts.context) do
+          {:ok, decoded_value} ->
+            updated_mapping = %{mapping | value: decoded_value}
+            {:cont, {:ok, [updated_mapping | acc]}}
 
-        {:error, error} when is_binary(error) ->
-          message = "Failed to decode #{inspect(mapping.name)}. #{error}"
-          {:halt, {:error, message}}
+          {:error, error} when is_binary(error) ->
+            message = "Failed to decode #{inspect(mapping.name)}. #{error}"
+            {:halt, {:error, message}}
 
-        other ->
-          "Decoding #{inspect(mapping.name)} should return {:ok, term()} or {:error, string()}"
-          |> Logger.warning()
+          other ->
+            "Decoding #{inspect(mapping.name)} should return {:ok, term()} or {:error, string()}"
+            |> Logger.warning()
 
-          {:halt, {:error, "Failed to decode #{inspect(mapping.name)}. #{inspect(other)}"}}
-      end
+            {:halt, {:error, "Failed to decode #{inspect(mapping.name)}. #{inspect(other)}"}}
+        end
+
+      mapping, {:ok, acc} ->
+        {:cont, {:ok, [mapping | acc]}}
     end)
   end
 

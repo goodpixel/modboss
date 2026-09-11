@@ -132,6 +132,7 @@ defmodule ModBoss.Schema do
       end
   """
 
+  require ModBoss.Mapping
   alias ModBoss.Mapping
 
   defmacro __using__(opts) do
@@ -247,6 +248,33 @@ defmodule ModBoss.Schema do
     define_mapping(__CALLER__, :discrete_input, addresses, name, opts)
   end
 
+  @doc """
+  Returns a stream of contiguous mappings from `a` up to `b`
+
+  Mapping `a` must have the lower address of the two, and the stream will
+  return mappings in ascending order, aborting when it reaches Mapping `b`
+  or if it reaches an address with no defined Mapping.
+  """
+  def contiguous_mappings_between(module, %Mapping{type: t} = a, %Mapping{type: t} = b)
+      when Mapping.is_ordered(a, b) do
+    Stream.unfold(a, fn prior ->
+      next_address = prior.starting_address + prior.address_count
+
+      if next_address < b.starting_address do
+        if mapping = module.__modboss_mapping__(t, next_address), do: {mapping, mapping}
+      end
+    end)
+  end
+
+  def contiguous_mappings_between(_module, %Mapping{} = a, %Mapping{} = b)
+      when not Mapping.is_ordered(a, b) do
+    raise "Mappings must be provided in order of starting address."
+  end
+
+  def contiguous_mappings_between(module, %Mapping{type: t1}, %Mapping{type: t2}) do
+    raise "Mappings must be the same type, got #{inspect(t1)} and #{inspect(t2)} in #{inspect(module)}."
+  end
+
   defp define_mapping(caller, type, addresses, name, opts) do
     module = caller.module
     {if_ast, opts} = Keyword.pop(opts, :if, true)
@@ -271,15 +299,14 @@ defmodule ModBoss.Schema do
     end
   end
 
-  @doc false
-  def validate_name!(%Macro.Env{file: file, line: line}, :all) do
+  defp validate_name!(%Macro.Env{file: file, line: line}, :all) do
     raise CompileError,
       file: file,
       line: line,
       description: "The name `:all` is reserved by ModBoss and cannot be used for a mapping."
   end
 
-  def validate_name!(_env, _name), do: :ok
+  defp validate_name!(_env, _name), do: :ok
 
   defp validate_if_ast!(env, name, {:fn, _, clauses}) do
     if Enum.any?(clauses, fn {:->, _, [args, _body]} -> fn_arity(args) != 1 end) do
@@ -404,6 +431,21 @@ defmodule ModBoss.Schema do
         end
       end)
 
+    addresses_to_names =
+      mappings
+      |> Enum.group_by(& &1.type)
+      |> Enum.into(%{}, fn {type, mappings_for_type} ->
+        addresses_to_names =
+          Enum.reduce(mappings_for_type, %{}, fn %Mapping{} = mapping, acc ->
+            mapping
+            |> Mapping.address_range()
+            |> Enum.into(acc, fn address -> {address, mapping.name} end)
+          end)
+
+        {type, addresses_to_names}
+      end)
+      |> Macro.escape()
+
     Module.delete_attribute(env.module, :modboss_mappings)
     Module.delete_attribute(env.module, :modboss_mapping_support)
 
@@ -417,6 +459,23 @@ defmodule ModBoss.Schema do
       def __max_batch__(:write, :coil), do: unquote(max_coil_writes)
 
       def __modboss_schema__, do: unquote(mappings_with_normalized_conditions)
+
+      def __modboss_mapping_names__, do: unquote(addresses_to_names)
+
+      @object_types [:holding_register, :input_register, :coil, :discrete_input]
+
+      def __modboss_mapping_names__(type) when type in @object_types do
+        Map.get(__modboss_mapping_names__(), type, %{})
+      end
+
+      @doc """
+      Returns the `ModBoss.Mapping` for the given modbus object `type` and `address`
+      """
+      def __modboss_mapping__(type, address) when type in @object_types and is_integer(address) do
+        if name = __modboss_mapping_names__(type)[address] do
+          Map.fetch!(__modboss_schema__(), name)
+        end
+      end
     end
   end
 
