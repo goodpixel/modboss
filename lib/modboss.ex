@@ -104,6 +104,9 @@ defmodule ModBoss do
   > into a single request because address 3 (`:error_count`) is not gap-safe.
   > Removing `:error_count` from the schema wouldn't help either—the address
   > would then be unmapped, which also prevents bridging.
+  >
+  > To see exactly which gaps were bridged for a given read, check the
+  > `gap_ranges` telemetry metadata—see `ModBoss.Telemetry` for details.
 
   ## Examples
 
@@ -188,22 +191,17 @@ defmodule ModBoss do
 
   if Code.ensure_loaded?(:telemetry) do
     defp do_reads(module, names, mappings, read_func, opts) do
-      start_metadata = %{schema: module, names: names, context: opts.context}
+      start_metadata = %{schema: module, requested_names: names, context: opts.context}
 
       :telemetry.span([:modboss, :read], start_metadata, fn ->
         {result, stats} = read_mappings(module, mappings, read_func, opts)
 
-        stop_measurements = %{
-          objects_requested: stats.objects,
-          batches: stats.batches,
-          addresses_read: stats.addresses,
-          total_attempts: stats.total_attempts
-        }
+        stop_measurements = Map.take(stats, [:callback_invocations, :retries, :batches])
 
         stop_metadata =
           start_metadata
+          |> Map.merge(stats.metadata)
           |> Map.put(:result, result)
-          |> Map.put(:unsupported, stats.unsupported)
 
         {result, stop_measurements, stop_metadata}
       end)
@@ -216,34 +214,53 @@ defmodule ModBoss do
   end
 
   defp read_mappings(module, mappings, read_func, opts) do
-    mappings =
+    mappings = Enum.map(mappings, &Mapping.evaluate_support(&1, opts.context))
+
+    {supported, unsupported} =
       mappings
       |> Enum.sort_by(&{&1.type, &1.starting_address})
-      |> evaluate_support(opts.context)
       |> fill_gaps(module, opts)
+      |> Enum.split_with(& &1.supported)
 
-    requested_mappings = Enum.filter(mappings, & &1.requested)
-    {supported, unsupported} = Enum.split_with(mappings, & &1.supported)
+    chunks = chunk_mappings(supported, module, :read)
+    {read_result, stats} = read_chunks(chunks, module, read_func, opts)
 
-    {read_result, stats} =
-      supported
-      |> chunk_mappings(module, :read)
-      |> read_chunks(module, read_func, opts)
+    stats =
+      Map.merge(stats, %{
+        batches: length(chunks),
+        metadata: %{
+          gap_ranges: gap_ranges(supported),
+          unsupported_names: Enum.map(unsupported, & &1.name)
+        }
+      })
 
-    stats = Map.put(stats, :unsupported, Enum.map(unsupported, & &1.name))
+    result =
+      with {:ok, values} <- read_result,
+           {:ok, mappings_with_encoded_vals} <- hydrate_values(mappings, values),
+           {:ok, mappings_with_decoded_vals} <- maybe_decode(mappings_with_encoded_vals, opts) do
+        collect_results(mappings_with_decoded_vals, opts)
+      else
+        {:error, _error} = error -> error
+      end
 
-    with {:ok, values} <- read_result,
-         {:ok, mappings_with_encoded_values} <- hydrate_values(requested_mappings, values),
-         {:ok, mappings_with_decoded_values} <- maybe_decode(mappings_with_encoded_values, opts) do
-      result = collect_results(mappings_with_decoded_values, opts)
-      {result, stats}
-    else
-      {:error, _error} = result -> {result, stats}
-    end
+    {result, stats}
   end
 
-  defp evaluate_support(mappings, context) when is_list(mappings) and is_map(context) do
-    Enum.map(mappings, &Mapping.evaluate_support(&1, context))
+  defp gap_ranges(sorted_mappings) do
+    sorted_mappings
+    |> Enum.reduce([], fn
+      %{requested: true}, acc ->
+        acc
+
+      mapping, [{prior, type, start, count} | rest] when is_adjacent(prior, mapping) ->
+        [{mapping, type, start, count + mapping.address_count} | rest]
+
+      mapping, acc ->
+        [{mapping, mapping.type, mapping.starting_address, mapping.address_count} | acc]
+    end)
+    |> Enum.reduce([], fn {_mapping, type, start, count}, acc ->
+      [{type, start, count} | acc]
+    end)
   end
 
   defguardp is_gap_eligible(prior_mapping, mapping)
@@ -293,35 +310,25 @@ defmodule ModBoss do
   end
 
   defp read_chunks(chunks, module, read_func, opts) do
-    initial_stats = %{
-      objects: 0,
-      batches: 0,
-      addresses: 0,
-      total_attempts: 0
-    }
-
+    initial_stats = %{callback_invocations: 0, retries: 0}
     initial = {{:ok, %{}}, initial_stats}
 
-    Enum.reduce_while(chunks, initial, fn mappings, acc ->
-      {{:ok, values}, stats} = acc
-      [first | _rest] = mappings
-      last = List.last(mappings)
+    Enum.reduce_while(chunks, initial, fn batched_mappings, {{:ok, values}, stats} ->
+      [first_mapping | _rest] = batched_mappings
+      last_mapping = List.last(batched_mappings)
 
-      starting_address = first.starting_address
-      ending_address = last.starting_address + last.address_count - 1
+      starting_address = first_mapping.starting_address
+      ending_address = last_mapping.starting_address + last_mapping.address_count - 1
       address_count = ending_address - starting_address + 1
-      object_count = Enum.sum_by(mappings, &if(&1.requested, do: &1.address_count, else: 0))
 
       {result, callback_attempts} =
         read_func
         |> wrap_read_callback(module, opts)
-        |> read_batch(first.type, starting_address, address_count)
+        |> read_batch(first_mapping.type, starting_address, address_count)
 
       updated_stats = %{
-        objects: stats.objects + object_count,
-        batches: stats.batches + 1,
-        addresses: stats.addresses + address_count,
-        total_attempts: stats.total_attempts + callback_attempts
+        callback_invocations: stats.callback_invocations + callback_attempts,
+        retries: stats.retries + (callback_attempts - 1)
       }
 
       case result do
@@ -617,20 +624,16 @@ defmodule ModBoss do
 
   if Code.ensure_loaded?(:telemetry) do
     defp do_writes(module, names, mappings, write_func, opts) do
-      start_metadata = %{schema: module, names: names, context: opts.context}
+      start_metadata = %{schema: module, requested_names: names, context: opts.context}
 
       :telemetry.span([:modboss, :write], start_metadata, fn ->
         {result, stats} = write_mappings(module, mappings, write_func, opts)
 
-        stop_measurements = %{
-          objects_requested: stats.objects,
-          batches: stats.batches,
-          total_attempts: stats.total_attempts
-        }
+        stop_measurements = Map.take(stats, [:callback_invocations, :retries, :batches])
 
         stop_metadata =
           start_metadata
-          |> Map.put(:unsupported, stats.unsupported)
+          |> Map.merge(stats.metadata)
           |> Map.put(:result, result)
 
         {result, stop_measurements, stop_metadata}
@@ -644,21 +647,32 @@ defmodule ModBoss do
   end
 
   defp write_mappings(module, mappings, write_func, opts) do
-    mappings = evaluate_support(mappings, opts.context)
-    {supported, unsupported} = Enum.split_with(mappings, & &1.supported)
-    initial_stats = %{objects: 0, batches: 0, total_attempts: 0}
+    mappings = Enum.map(mappings, &Mapping.evaluate_support(&1, opts.context))
+
+    {supported, unsupported} =
+      mappings
+      |> Enum.sort_by(& &1.starting_address)
+      |> Enum.split_with(& &1.supported)
+
+    chunks = chunk_mappings(supported, module, :write)
+    initial_stats = %{callback_invocations: 0, retries: 0}
 
     {write_result, stats} =
-      with {:ok, encoded} <- encode_mappings(supported, opts.context) do
-        encoded
-        |> Enum.sort_by(& &1.starting_address)
-        |> chunk_mappings(module, :write)
-        |> write_chunks(module, write_func, initial_stats, opts)
+      with {:ok, encoded} <- encode_chunked_mappings(chunks, opts.context) do
+        write_chunks(encoded, module, write_func, initial_stats, opts)
       else
         {:error, error} -> {{:error, error}, initial_stats}
       end
 
-    {write_result, Map.put(stats, :unsupported, Enum.map(unsupported, & &1.name))}
+    stats =
+      Map.merge(stats, %{
+        batches: length(chunks),
+        metadata: %{
+          unsupported_names: Enum.map(unsupported, & &1.name)
+        }
+      })
+
+    {write_result, stats}
   end
 
   defp write_chunks(chunks, module, write_func, initial_stats, opts) do
@@ -678,10 +692,8 @@ defmodule ModBoss do
       {result, attempts} = wrapped_write.(first.type, first.starting_address, value_or_values)
 
       updated_stats = %{
-        stats
-        | objects: stats.objects + address_count,
-          batches: stats.batches + 1,
-          total_attempts: stats.total_attempts + attempts
+        callback_invocations: stats.callback_invocations + attempts,
+        retries: stats.retries + (attempts - 1)
       }
 
       case result do
@@ -812,6 +824,19 @@ defmodule ModBoss do
     }
   end
 
+  defp encode_chunked_mappings(chunked_mappings, context) do
+    Enum.reduce_while(chunked_mappings, {:ok, []}, fn chunk, {:ok, acc} ->
+      case encode_mappings(chunk, context) do
+        {:ok, chunk} -> {:cont, {:ok, [chunk | acc]}}
+        {:error, message} -> {:halt, {:error, message}}
+      end
+    end)
+    |> case do
+      {:ok, chunks} -> {:ok, Enum.reverse(chunks)}
+      error -> error
+    end
+  end
+
   defp encode_mappings(mappings, context) do
     Enum.reduce_while(mappings, {:ok, []}, fn mapping, {:ok, acc} ->
       case encode_value(mapping, context) do
@@ -830,6 +855,10 @@ defmodule ModBoss do
           {:halt, {:error, "Failed to encode #{inspect(mapping.name)}. #{inspect(other)}"}}
       end
     end)
+    |> case do
+      {:ok, mappings} -> {:ok, Enum.reverse(mappings)}
+      error -> error
+    end
   end
 
   defp encode_value(%Mapping{} = mapping, context) do

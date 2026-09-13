@@ -37,7 +37,7 @@ defmodule ModBoss.Telemetry do
       # Metadata:
       %{
         schema: module(),
-        names: [atom()],
+        requested_names: [atom()],
         context: map()
       }
 
@@ -50,18 +50,18 @@ defmodule ModBoss.Telemetry do
         duration: integer(),
         monotonic_time: integer(),
         batches: non_neg_integer(),
-        total_attempts: pos_integer(),
-        objects_requested: non_neg_integer(),
-        addresses_read: non_neg_integer()
+        callback_invocations: non_neg_integer(),
+        retries: non_neg_integer()
       }
 
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
+        requested_names: [atom()],
         context: map(),
-        result: term(),
-        unsupported: [atom()]
+        unsupported_names: [atom()],
+        gap_ranges: [{atom(), non_neg_integer(), pos_integer()}],
+        result: term()
       }
 
   ### Read Exception
@@ -77,7 +77,7 @@ defmodule ModBoss.Telemetry do
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
+        requested_names: [atom()],
         context: map(),
         kind: atom(),
         reason: term(),
@@ -97,7 +97,7 @@ defmodule ModBoss.Telemetry do
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
+        requested_names: [atom()],
         context: map()
       }
 
@@ -110,17 +110,17 @@ defmodule ModBoss.Telemetry do
         duration: integer(),
         monotonic_time: integer(),
         batches: non_neg_integer(),
-        total_attempts: pos_integer(),
-        objects_requested: non_neg_integer()
+        callback_invocations: non_neg_integer(),
+        retries: non_neg_integer()
       }
 
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
+        requested_names: [atom()],
         context: map(),
-        result: term(),
-        unsupported: [atom()]
+        unsupported_names: [atom()],
+        result: term()
       }
 
   ### Write Exception
@@ -136,7 +136,7 @@ defmodule ModBoss.Telemetry do
       # Metadata
       %{
         schema: module(),
-        names: [atom()],
+        requested_names: [atom()],
         context: map(),
         kind: atom(),
         reason: term(),
@@ -289,41 +289,30 @@ defmodule ModBoss.Telemetry do
 
   * `duration` — elapsed time in native time units. Convert with
     `System.convert_time_unit(duration, :native, :millisecond)`.
-  * `batches` — number of batches attempted for the operation. Each contiguous
-    address range of one object type is one batch. Does not account for retries.
-  * `total_attempts` — total number of `read_func`/`write_func` invocations,
-    including retries. Equal to `batches` when no retries were needed.
-    The difference of `total_attempts - batches` is the number of retries.
-  * `objects_requested` — total Modbus objects (registers/coils) covered by
-    attempted callbacks.
-  * `addresses_read` — total addresses attempted on the wire, including gap
-    addresses (read operations only).
-
-  > #### Partial failures {: .info}
-  >
-  > When an operation requires multiple callbacks and one fails partway through,
-  > measurements reflect what was **attempted** (including the failed callback),
-  > not what was planned. For example, if a read groups into 3 address batches
-  > and the 2nd fails, `batches` will be `2`, and `objects_requested` and
-  > `addresses_read` will cover only those first 2 batches.
+  * `batches` — how many batches the operation's addresses were divided into.
+    This reflects the **planned batches**, not how many were actually attempted in a failure case.
+  * `callback_invocations` — total number of `read_func`/`write_func`
+    invocations for the operation, including retries.
+  * `retries` — how many of those invocations were retries (i.e. not the
+    first attempt for their batch).
 
   ## Metadata details
 
   * `schema` — the schema module (e.g. `MyDevice.Schema`).
-  * `names` — mapping name(s) as a list of atoms, requested for the operation.
-    Only present on per-operation events.
+  * `requested_names` — names of mappings requested for the ModBoss.read/write.
   * `context` — the value of the `:context` option passed to `ModBoss.read/4`
-    or `ModBoss.write/4`. Always present; defaults to `%{}` when not provided.
-  * `result` — the raw result: `{:ok, value}` or `{:error, reason}` for reads;
-    `:ok` or `{:error, reason}` for writes.
-  * `object_type` — `:holding_register`, `:input_register`, `:coil`, or `:discrete_input`.
+    or `ModBoss.write/4`. Defaults to `%{}` when not provided.
+  * `unsupported_names` — requested mapping names whose `:if` condition did not evaluate
+    to `true` for the given context. These mappings are short-circuited;
+    they are neither read from nor written to via the read/write callbacks.
+  * `gap_ranges` — List of `{type, starting_address, address_count}` describing every gap
+    bridged as part of the operation (see the "Gaps" section of `ModBoss.read/4`).
+  * `object_type` — Modbus object type for the request.
   * `starting_address` — the starting address for the request.
   * `address_count` — number of addresses in the request.
   * `attempt` — which attempted callback invocation this is, from 1 up to `max_attempts`.
   * `max_attempts` — the configured maximum number of attempts for this callback.
-  * `unsupported` — mapping names whose `:if` condition evaluated to `false` for
-    the given context. These mappings were skipped (not read from or written to
-    the device). Empty list when all requested mappings are supported. Only present
-    on per-operation stop events.
+  * `result` — the raw `{:ok, value}`/`{:error, reason}` result for reads or
+    `:ok`/`{:error, reason}` result for writes.
   """
 end

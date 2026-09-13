@@ -59,18 +59,22 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :read, :start], start_measurements, start_metadata}
       assert is_integer(start_measurements.system_time)
       assert start_metadata.schema == TestSchema
-      assert start_metadata.names == [:foo]
+      assert start_metadata.requested_names == [:foo]
+      refute Map.has_key?(start_metadata, :unsupported_names)
+      refute Map.has_key?(start_metadata, :gap_ranges)
+      refute Map.has_key?(start_metadata, :result)
 
       # Per-operation stop
       assert_receive {:telemetry, [:modboss, :read, :stop], stop_measurements, stop_metadata}
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
       assert stop_measurements.batches == 1
-      assert stop_measurements.objects_requested == 1
-      assert stop_measurements.addresses_read == 1
-      assert stop_measurements.total_attempts == 1
+      assert stop_measurements.callback_invocations == 1
+      assert stop_measurements.retries == 0
       assert stop_metadata.schema == TestSchema
-      assert stop_metadata.names == [:foo]
+      assert stop_metadata.requested_names == [:foo]
+      assert stop_metadata.unsupported_names == []
+      assert stop_metadata.gap_ranges == []
       assert stop_metadata.result == {:ok, 42}
     end
 
@@ -126,8 +130,7 @@ defmodule ModBoss.TelemetryTest do
       # Batched reads
       assert_receive {:telemetry, [:modboss, :read, :stop], read_measurements, _stop_metadata}
       assert read_measurements.batches == 2
-      assert read_measurements.objects_requested == 3
-      assert read_measurements.total_attempts == 2
+      assert read_measurements.callback_invocations == 2
 
       types = Enum.sort([meta1.object_type, meta2.object_type])
       assert types == [:coil, :holding_register]
@@ -148,18 +151,16 @@ defmodule ModBoss.TelemetryTest do
 
       {:ok, [1, 2, 3]} = ModBoss.read(TestSchema, :qux, read_func(device))
 
-      assert_receive {:telemetry, [:modboss, :read, :stop], read_measurements, _}
-      assert read_measurements.objects_requested == 3
-      assert read_measurements.addresses_read == 3
+      assert_receive {:telemetry, [:modboss, :read, :stop], read_measurements, _stop_metadata}
       assert read_measurements.batches == 1
-      assert read_measurements.total_attempts == 1
+      assert read_measurements.callback_invocations == 1
 
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _req_measurements, req_meta}
       assert req_meta.address_count == 3
       assert req_meta.attempt == 1
     end
 
-    test "reports gap measurements when max_gap bridges addresses", %{device: device} do
+    test "reports gap ranges when max_gap bridges addresses", %{device: device} do
       # GapSchema: alpha(1), bravo(2), charlie(3), delta(4), echo(5)
       # Request alpha(1) and echo(5) with max_gap: 10
       # Gap addresses: 2, 3, 4 (bravo, charlie, delta — all readable)
@@ -175,17 +176,17 @@ defmodule ModBoss.TelemetryTest do
       {:ok, %{alpha: 10, echo: 50}} =
         ModBoss.read(GapSchema, [:alpha, :echo], read_func(device), max_gap: 10)
 
-      # Per-operation: 1 request, 2 objects requested, 5 addresses read, 3 gap addresses
-      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
-      assert measurements.batches == 1
-      assert measurements.objects_requested == 2
-      assert measurements.addresses_read == 5
-      assert measurements.total_attempts == 1
+      # Per-operation: 1 batch, 1 callback invocation, one gap of 3 bridged addresses
+      assert_receive {:telemetry, [:modboss, :read, :stop], stop_measurements, stop_metadata}
+      assert stop_measurements.batches == 1
+      assert stop_measurements.callback_invocations == 1
+      assert stop_metadata.gap_ranges == [{:holding_register, 2, 3}]
 
       # Per-request: single request spanning addresses 1-5
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _req_measurements, req_meta}
-      assert req_meta.address_count == 5
       assert req_meta.attempt == 1
+      assert req_meta.starting_address == 1
+      assert req_meta.address_count == 5
     end
 
     test "reports multiple gaps correctly", %{device: device} do
@@ -202,17 +203,17 @@ defmodule ModBoss.TelemetryTest do
       {:ok, %{alpha: 10, charlie: 30, echo: 50}} =
         ModBoss.read(GapSchema, [:alpha, :charlie, :echo], read_func(device), max_gap: 10)
 
-      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
+      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, stop_metadata}
+      # Two separate gaps of size 1 each (addr 2 and addr 4)
       assert measurements.batches == 1
-      assert measurements.objects_requested == 3
-      assert measurements.addresses_read == 5
-      assert measurements.total_attempts == 1
+      assert measurements.callback_invocations == 1
+      assert stop_metadata.gap_ranges == [{:holding_register, 2, 1}, {:holding_register, 4, 1}]
 
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _req_measurements, req_meta}
       assert req_meta.attempt == 1
     end
 
-    test "reports zero gap measurements without max_gap", %{device: device} do
+    test "reports zero gap ranges without max_gap", %{device: device} do
       set_objects(device, %{
         {:holding_register, 1} => 10,
         {:holding_register, 2} => 20
@@ -220,17 +221,16 @@ defmodule ModBoss.TelemetryTest do
 
       {:ok, %{foo: 10, bar: 20}} = ModBoss.read(TestSchema, [:foo, :bar], read_func(device))
 
-      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
-      assert measurements.total_attempts == 1
-      assert measurements.addresses_read == measurements.objects_requested
+      assert_receive {:telemetry, [:modboss, :read, :stop], measurements, stop_metadata}
+      assert measurements.callback_invocations == 1
+      assert stop_metadata.gap_ranges == []
     end
 
     test "includes names as a list even for singular reads", %{device: device} do
       set_objects(device, %{{:holding_register, 1} => 42})
       {:ok, 42} = ModBoss.read(TestSchema, :foo, read_func(device))
 
-      assert_receive {:telemetry, [:modboss, :read, :start], _, %{names: names}}
-      assert names == [:foo]
+      assert_receive {:telemetry, [:modboss, :read, :start], _, %{requested_names: [:foo]}}
     end
 
     test "includes all requested names for plural reads", %{device: device} do
@@ -241,7 +241,7 @@ defmodule ModBoss.TelemetryTest do
 
       {:ok, %{foo: 10, bar: 20}} = ModBoss.read(TestSchema, [:foo, :bar], read_func(device))
 
-      assert_receive {:telemetry, [:modboss, :read, :start], _, %{names: names}}
+      assert_receive {:telemetry, [:modboss, :read, :start], _, %{requested_names: names}}
       assert Enum.sort(names) == [:bar, :foo]
     end
 
@@ -253,14 +253,13 @@ defmodule ModBoss.TelemetryTest do
 
       assert_receive {:telemetry, [:modboss, :read, :stop], stop_measurements, read_metadata}
       assert read_metadata.schema == TestSchema
-      assert read_metadata.names == [:foo]
+      assert read_metadata.requested_names == [:foo]
       assert read_metadata.result == {:error, "connection refused"}
 
-      # 1 object requested, 1 request attempted, 1 address attempted
-      assert stop_measurements.objects_requested == 1
+      # The plan (1 batch) is still fully known even though the callback failed
       assert stop_measurements.batches == 1
-      assert stop_measurements.addresses_read == 1
-      assert stop_measurements.total_attempts == 1
+      assert stop_measurements.callback_invocations == 1
+      assert stop_measurements.retries == 0
 
       assert_receive {:telemetry, [:modboss, :read_callback, :start], _, _}
       assert_receive {:telemetry, [:modboss, :read_callback, :stop], _, req_metadata}
@@ -268,9 +267,9 @@ defmodule ModBoss.TelemetryTest do
       assert req_metadata.result == {:error, "connection refused"}
     end
 
-    test "reports attempted stats on partial read failure", %{device: device} do
-      # 3 batches planned:
-      # We'll succeed on the 1st and fail on the 2nd — the 3rd is never attempted.
+    test "reports the full planned batch count on partial read failure", %{device: device} do
+      # 4 batches planned:
+      # We'll succeed on the 1st and fail on the 2nd — the 3rd and 4th are never attempted.
       schema = unique_module()
 
       Code.compile_string("""
@@ -315,21 +314,18 @@ defmodule ModBoss.TelemetryTest do
 
       assert_receive {:telemetry, [:modboss, :read, :stop], measurements, metadata}
       assert metadata.result == {:error, "timeout"}
+      assert metadata.gap_ranges == [{:holding_register, 2, 2}, {:holding_register, 7, 3}]
 
-      # 3 planned, but only 2 attempted (1 succeeded + 1 failed)
-      assert measurements.batches == 2
+      # 4 batches were planned...
+      assert measurements.batches == 4
 
-      # 2 objects in chunk 1 + 2 objects in chunk 2
-      assert measurements.objects_requested == 4
-
-      # 4 addresses in chunk 1 + 5 addresses in chunk 2
-      assert measurements.addresses_read == 9
-
-      # attempted the read callback twice
-      assert measurements.total_attempts == 2
+      # ...but only 2 were actually attempted (1 succeeded + 1 failed) before the error
+      assert measurements.callback_invocations == 2
+      assert measurements.retries == 0
     end
 
-    test "retries emit per-attempt callback spans and total_attempts", %{device: device} do
+    test "retries emit per-attempt callback spans and roll up into callback_invocations/retries",
+         %{device: device} do
       # 2 batches (holding_register + coil), each fails once before succeeding
       set_objects(device, %{
         {:holding_register, 1} => 10,
@@ -364,9 +360,11 @@ defmodule ModBoss.TelemetryTest do
       assert cb2_attempt2.max_attempts == 2
       assert {:ok, _} = cb2_attempt2.result
 
-      # Outer span: 2 batches x 2 attempts = 4 total
+      # Outer span: 2 batches planned, 4 total invocations, 2 of which were retries
       assert_receive {:telemetry, [:modboss, :read, :stop], measurements, _}
-      assert measurements.total_attempts == 4
+      assert measurements.batches == 2
+      assert measurements.callback_invocations == 4
+      assert measurements.retries == 2
     end
 
     test "emits exception event when read_func raises", %{device: _device} do
@@ -474,8 +472,12 @@ defmodule ModBoss.TelemetryTest do
           context: %{supported: false}
         )
 
+      # unsupported_names depends on a successful plan, so it's stop-only
+      assert_receive {:telemetry, [:modboss, :read, :start], _, start_metadata}
+      refute Map.has_key?(start_metadata, :unsupported_names)
+
       assert_receive {:telemetry, [:modboss, :read, :stop], _, stop_metadata}
-      assert stop_metadata.unsupported == [:conditional]
+      assert stop_metadata.unsupported_names == [:conditional]
     end
   end
 
@@ -497,21 +499,24 @@ defmodule ModBoss.TelemetryTest do
     test "emits :write start and stop spans for a successful write", %{device: device} do
       :ok = ModBoss.write(TestSchema, [baz: 99], write_func(device))
 
-      # Per-operation start
+      # Per-operation start — only fields known before planning are present
       assert_receive {:telemetry, [:modboss, :write, :start], start_measurements, start_metadata}
       assert is_integer(start_measurements.system_time)
       assert start_metadata.schema == TestSchema
-      assert start_metadata.names == [:baz]
+      assert start_metadata.requested_names == [:baz]
+      refute Map.has_key?(start_metadata, :unsupported_names)
+      refute Map.has_key?(start_metadata, :result)
 
       # Per-operation stop
       assert_receive {:telemetry, [:modboss, :write, :stop], stop_measurements, stop_metadata}
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
       assert stop_measurements.batches == 1
-      assert stop_measurements.objects_requested == 1
-      assert stop_measurements.total_attempts == 1
+      assert stop_measurements.callback_invocations == 1
+      assert stop_measurements.retries == 0
       assert stop_metadata.schema == TestSchema
-      assert stop_metadata.names == [:baz]
+      assert stop_metadata.requested_names == [:baz]
+      assert stop_metadata.unsupported_names == []
       assert stop_metadata.result == :ok
     end
 
@@ -552,10 +557,9 @@ defmodule ModBoss.TelemetryTest do
       assert meta2.attempt == 1
 
       # Batched writes
-      assert_receive {:telemetry, [:modboss, :write, :stop], write_measurements, _}
+      assert_receive {:telemetry, [:modboss, :write, :stop], write_measurements, _stop_metadata}
       assert write_measurements.batches == 2
-      assert write_measurements.objects_requested == 3
-      assert write_measurements.total_attempts == 2
+      assert write_measurements.callback_invocations == 2
 
       types = Enum.sort([meta1.object_type, meta2.object_type])
       assert types == [:coil, :holding_register]
@@ -571,10 +575,9 @@ defmodule ModBoss.TelemetryTest do
     test "emits correct counts for multi-address writes", %{device: device} do
       :ok = ModBoss.write(TestSchema, [qux: [1, 2, 3]], write_func(device))
 
-      assert_receive {:telemetry, [:modboss, :write, :stop], write_measurements, _}
-      assert write_measurements.objects_requested == 3
+      assert_receive {:telemetry, [:modboss, :write, :stop], write_measurements, _stop_metadata}
       assert write_measurements.batches == 1
-      assert write_measurements.total_attempts == 1
+      assert write_measurements.callback_invocations == 1
 
       assert_receive {:telemetry, [:modboss, :write_callback, :stop], _req_measurements, req_meta}
       assert req_meta.address_count == 3
@@ -593,8 +596,7 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :write, :stop], stop_measurements, write_metadata}
       assert write_metadata.result == {:error, "device busy"}
       assert stop_measurements.batches == 1
-      assert stop_measurements.objects_requested == 1
-      assert stop_measurements.total_attempts == 1
+      assert stop_measurements.callback_invocations == 1
 
       assert_receive {:telemetry, [:modboss, :write_callback, :start], _, _}
       assert_receive {:telemetry, [:modboss, :write_callback, :stop], _, req_metadata}
@@ -602,7 +604,7 @@ defmodule ModBoss.TelemetryTest do
       assert req_metadata.result == {:error, "device busy"}
     end
 
-    test "reports attempted stats on partial write failure", %{device: device} do
+    test "reports the full planned batch count on partial write failure", %{device: device} do
       # max_batch_writes: 1 forces each register into its own callback.
       # 3 callbacks planned, succeed on the 1st, fail on the 2nd — the 3rd is skipped.
       schema = unique_module()
@@ -635,13 +637,16 @@ defmodule ModBoss.TelemetryTest do
       assert_receive {:telemetry, [:modboss, :write, :stop], measurements, metadata}
       assert metadata.result == {:error, "timeout"}
 
-      # 3 planned, but only 2 attempted (1 succeeded + 1 failed)
-      assert measurements.batches == 2
-      assert measurements.objects_requested == 2
-      assert measurements.total_attempts == 2
+      # 3 batches were planned...
+      assert measurements.batches == 3
+
+      # ...but only 2 were actually attempted (1 succeeded + 1 failed)
+      assert measurements.callback_invocations == 2
+      assert measurements.retries == 0
     end
 
-    test "retries emit per-attempt callback spans and total_attempts", %{device: device} do
+    test "retries emit per-attempt callback spans and roll up into callback_invocations/retries",
+         %{device: device} do
       flaky_write = flakify(write_func(device), fn -> {:error, "flaky"} end, flakes: 1)
 
       :ok = ModBoss.write(TestSchema, [baz: 99], flaky_write, max_attempts: 3)
@@ -657,7 +662,9 @@ defmodule ModBoss.TelemetryTest do
       assert attempt2.result == :ok
 
       assert_receive {:telemetry, [:modboss, :write, :stop], measurements, _}
-      assert measurements.total_attempts == 2
+      assert measurements.batches == 1
+      assert measurements.callback_invocations == 2
+      assert measurements.retries == 1
     end
 
     test "emits exception event when write_func raises", %{device: _device} do
@@ -709,7 +716,9 @@ defmodule ModBoss.TelemetryTest do
         ModBoss.write(schema, %{conditional: 1}, write_func(device))
       end
 
-      assert_receive {:telemetry, [:modboss, :write, :start], _, _}
+      assert_receive {:telemetry, [:modboss, :write, :start], _, start_metadata}
+      refute Map.has_key?(start_metadata, :unsupported_names)
+
       assert_receive {:telemetry, [:modboss, :write, :exception], _, metadata}
       assert metadata.kind == :error
     end
@@ -732,9 +741,18 @@ defmodule ModBoss.TelemetryTest do
       assert {:error, "Failed to encode :bad_encode. nope"} =
                ModBoss.write(schema, %{bad_encode: 1}, write_func(device))
 
-      assert_receive {:telemetry, [:modboss, :write, :start], _, _}
-      assert_receive {:telemetry, [:modboss, :write, :stop], _, metadata}
+      # Planning succeeds even though encoding (part of execution) fails afterward
+      assert_receive {:telemetry, [:modboss, :write, :start], _, start_metadata}
+      assert start_metadata.requested_names == [:bad_encode]
+
+      assert_receive {:telemetry, [:modboss, :write, :stop], stop_measurements, metadata}
       assert metadata.result == {:error, "Failed to encode :bad_encode. nope"}
+      assert metadata.unsupported_names == []
+
+      # The plan (1 batch) is known, but no callback ever ran
+      assert stop_measurements.batches == 1
+      assert stop_measurements.callback_invocations == 0
+      assert stop_measurements.retries == 0
     end
 
     test "includes context in all event metadata when context is provided", %{device: device} do
@@ -805,8 +823,12 @@ defmodule ModBoss.TelemetryTest do
           context: %{supported: false}
         )
 
+      # unsupported_names depends on a successful plan, so it's stop-only
+      assert_receive {:telemetry, [:modboss, :write, :start], _, start_metadata}
+      refute Map.has_key?(start_metadata, :unsupported_names)
+
       assert_receive {:telemetry, [:modboss, :write, :stop], _, stop_metadata}
-      assert stop_metadata.unsupported == [:conditional]
+      assert stop_metadata.unsupported_names == [:conditional]
     end
   end
 
