@@ -263,9 +263,9 @@ defmodule ModBoss do
     end)
   end
 
-  defguardp is_gap_eligible(prior_mapping, mapping)
-            when mapping.type == prior_mapping.type and
-                   mapping.supported and prior_mapping.supported
+  defguardp is_gap_eligible(mapping_before_gap, mapping_after_gap)
+            when mapping_before_gap.type == mapping_after_gap.type and
+                   mapping_before_gap.supported and mapping_after_gap.supported
 
   defp fill_gaps(mappings, module, opts) do
     Enum.reduce(mappings, [], fn
@@ -274,7 +274,8 @@ defmodule ModBoss do
 
       mapping, [prior_mapping | _] = acc when is_gap_eligible(prior_mapping, mapping) ->
         if Mapping.gap_size(prior_mapping, mapping) <= Map.fetch!(opts.max_gap, mapping.type) do
-          try_gap_fill(module, acc, mapping, opts.context)
+          gap = get_gap_mappings(module, prior_mapping, mapping, opts.context)
+          [mapping | Enum.reduce(gap, acc, fn gap_mapping, priors -> [gap_mapping | priors] end)]
         else
           [mapping | acc]
         end
@@ -285,29 +286,23 @@ defmodule ModBoss do
     |> Enum.reverse()
   end
 
-  defp try_gap_fill(module, [prior_mapping | _] = mappings, next_mapping, context) do
+  defp get_gap_mappings(module, prior, next, context) do
     gap_mappings =
       module
-      |> Schema.contiguous_mappings_between(prior_mapping, next_mapping)
+      |> Schema.contiguous_mappings(prior)
       |> Stream.map(&Mapping.evaluate_support(&1, context))
-      |> Enum.take_while(fn
-        %Mapping{gap_safe: true, supported: true} -> true
-        %Mapping{} -> false
+      |> Enum.take_while(fn mapping ->
+        mapping.gap_safe and mapping.supported and address_after(mapping) <= next.starting_address
       end)
 
-    next_address_after_gap =
-      if final_gap_mapping = List.last(gap_mappings) do
-        final_gap_mapping.starting_address + final_gap_mapping.address_count
-      end
-
-    # If we can completely fill the gap, do so; otherwise don't include the gap mappings
-    if next_address_after_gap == next_mapping.starting_address do
-      mappings = Enum.reduce(gap_mappings, mappings, fn mapping, acc -> [mapping | acc] end)
-      [next_mapping | mappings]
-    else
-      [next_mapping | mappings]
+    # Only return mappings if we can completely fill the gap
+    case List.last(gap_mappings) do
+      nil -> []
+      last -> if address_after(last) == next.starting_address, do: gap_mappings, else: []
     end
   end
+
+  defp address_after(%Mapping{starting_address: start, address_count: length}), do: start + length
 
   defp read_chunks(chunks, module, read_func, opts) do
     initial_stats = %{callback_invocations: 0, retries: 0}
