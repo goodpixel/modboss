@@ -739,7 +739,7 @@ defmodule ModBoss do
   defp validate!(%{context: c} = opts, :context) when is_map(c), do: opts
   defp validate!(opts, opt), do: raise("Invalid option #{inspect([{opt, opts[opt]}])}.")
 
-  @spec chunk_mappings([Mapping.t()], module(), :read | :write) :: [Mapping.t()]
+  @spec chunk_mappings([Mapping.t()], module(), :read | :write) :: [[Mapping.t()]]
   defp chunk_mappings(mappings, module, mode) do
     initial_acc = {_mappings = [], _address_count = 0}
 
