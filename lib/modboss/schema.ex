@@ -247,12 +247,8 @@ defmodule ModBoss.Schema do
     define_mapping(__CALLER__, :discrete_input, addresses, name, opts)
   end
 
-  @doc """
-  Returns a stream of contiguous mappings immediately following `mapping`
-
-  The stream aborts when it reaches an address with no defined Mapping.
-  """
-  def contiguous_mappings(module, %Mapping{type: object_type} = prior_mapping) do
+  @doc false
+  def contiguous_mappings(%Mapping{type: object_type} = prior_mapping, module) do
     Stream.unfold(prior_mapping, fn prior ->
       next_address = prior.starting_address + prior.address_count
 
