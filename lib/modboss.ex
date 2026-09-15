@@ -288,8 +288,8 @@ defmodule ModBoss do
 
   defp get_gap_mappings(module, prior, next, context) do
     gap_mappings =
-      module
-      |> Schema.contiguous_mappings(prior)
+      prior
+      |> Schema.contiguous_mappings(module)
       |> Stream.map(&Mapping.evaluate_support(&1, context))
       |> Enum.take_while(fn mapping ->
         mapping.gap_safe and mapping.supported and address_after(mapping) <= next.starting_address

@@ -548,15 +548,15 @@ defmodule ModBoss.SchemaTest do
         qux = mapping(module, :qux)
 
         assert [:bar, :baz, :qux] =
-                 Schema.contiguous_mappings(module, foo)
+                 Schema.contiguous_mappings(foo, module)
                  |> Enum.map(fn %Mapping{name: name} -> name end)
 
         assert [:qux] =
-                 Schema.contiguous_mappings(module, baz)
+                 Schema.contiguous_mappings(baz, module)
                  |> Enum.map(fn %Mapping{name: name} -> name end)
 
         assert [] =
-                 Schema.contiguous_mappings(module, qux)
+                 Schema.contiguous_mappings(qux, module)
                  |> Enum.map(fn %Mapping{name: name} -> name end)
       end
     end
@@ -578,7 +578,7 @@ defmodule ModBoss.SchemaTest do
       foo = mapping(module, :foo)
 
       assert [] =
-               Schema.contiguous_mappings(module, foo)
+               Schema.contiguous_mappings(foo, module)
                |> Enum.map(fn %Mapping{name: name} -> name end)
     end
   end
