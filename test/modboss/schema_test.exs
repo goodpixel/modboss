@@ -583,6 +583,68 @@ defmodule ModBoss.SchemaTest do
     end
   end
 
+  describe "max batch options" do
+    test "accepts per-type read limits keyed by object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema,
+          max_batch_reads: [holding_register: 1, input_register: 2, coil: 3, discrete_input: 4]
+      end
+      """)
+
+      assert module.__max_batch__(:read) ==
+               %{holding_register: 1, input_register: 2, coil: 3, discrete_input: 4}
+    end
+
+    test "accepts per-type write limits keyed by object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema, max_batch_writes: %{holding_register: 1, coil: 2}
+      end
+      """)
+
+      assert module.__max_batch__(:write) == %{holding_register: 1, coil: 2}
+    end
+
+    test "raises an exception for unrecognized read types" do
+      assert_raise CompileError, ~r/max_batch_reads.*:holding_registers/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema, max_batch_reads: [holding_registers: 1]
+        end
+        """)
+      end
+    end
+
+    test "raises an exception for types that can't be written" do
+      for type <- [:input_register, :discrete_input] do
+        assert_raise CompileError, ~r/max_batch_writes.*#{inspect(type)}/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, max_batch_writes: [#{type}: 1]
+          end
+          """)
+        end
+      end
+    end
+
+    test "raises an exception for values that aren't positive integers" do
+      for opt <- [:max_batch_reads, :max_batch_writes], value <- [0, -1, 1.5, ":foo"] do
+        assert_raise CompileError, ~r/#{opt}.*#{Regex.escape(to_string(value))}/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, #{opt}: [holding_register: #{value}]
+          end
+          """)
+        end
+      end
+    end
+  end
+
   defp unique_module do
     name = "#{__MODULE__}#{System.unique_integer([:positive])}"
     Module.concat([name])

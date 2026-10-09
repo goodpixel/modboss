@@ -143,8 +143,8 @@ defmodule ModBoss.Schema do
 
       Module.register_attribute(__MODULE__, :modboss_mappings, accumulate: true)
       Module.register_attribute(__MODULE__, :modboss_mapping_support, accumulate: true)
-      Module.put_attribute(__MODULE__, :max_reads_per_batch, unquote(max_reads))
-      Module.put_attribute(__MODULE__, :max_writes_per_batch, unquote(max_writes))
+      Module.put_attribute(__MODULE__, :max_batch_reads, unquote(max_reads))
+      Module.put_attribute(__MODULE__, :max_batch_writes, unquote(max_writes))
 
       @before_compile unquote(__MODULE__)
     end
@@ -340,17 +340,37 @@ defmodule ModBoss.Schema do
     end
   end
 
+  defp resolve_max_batch!(env, opt, defaults) do
+    env.module
+    |> Module.get_attribute(opt)
+    |> Enum.into(defaults, fn
+      {type, limit} when is_map_key(defaults, type) and is_integer(limit) and limit > 0 ->
+        {type, limit}
+
+      invalid ->
+        raise CompileError,
+          file: env.file,
+          line: env.line,
+          description: """
+          Invalid #{inspect(opt)} entry: #{inspect(invalid)}. \
+          Expected one of #{inspect(Map.keys(defaults))} with a positive integer.\
+          """
+    end)
+  end
+
+  @default_max_batch_reads %{
+    holding_register: 125,
+    input_register: 125,
+    coil: 2000,
+    discrete_input: 2000
+  }
+
+  @default_max_batch_writes %{holding_register: 123, coil: 1968}
+
   defmacro __before_compile__(env) do
-    max_reads = Module.get_attribute(env.module, :max_reads_per_batch)
-    max_writes = Module.get_attribute(env.module, :max_writes_per_batch)
+    max_reads = resolve_max_batch!(env, :max_batch_reads, @default_max_batch_reads)
+    max_writes = resolve_max_batch!(env, :max_batch_writes, @default_max_batch_writes)
 
-    max_holding_register_reads = max_reads[:holding_registers] || 125
-    max_input_register_reads = max_reads[:input_registers] || 125
-    max_coil_reads = max_reads[:coils] || 2000
-    max_discrete_input_reads = max_reads[:discrete_inputs] || 2000
-
-    max_holding_register_writes = max_writes[:holding_registers] || 123
-    max_coil_writes = max_writes[:coils] || 1968
     mappings = Module.get_attribute(env.module, :modboss_mappings)
 
     duplicate_names =
@@ -433,13 +453,8 @@ defmodule ModBoss.Schema do
     Module.delete_attribute(env.module, :modboss_mapping_support)
 
     quote do
-      def __max_batch__(:read, :holding_register), do: unquote(max_holding_register_reads)
-      def __max_batch__(:read, :input_register), do: unquote(max_input_register_reads)
-      def __max_batch__(:read, :coil), do: unquote(max_coil_reads)
-      def __max_batch__(:read, :discrete_input), do: unquote(max_discrete_input_reads)
-
-      def __max_batch__(:write, :holding_register), do: unquote(max_holding_register_writes)
-      def __max_batch__(:write, :coil), do: unquote(max_coil_writes)
+      def __max_batch__(:read), do: unquote(Macro.escape(max_reads))
+      def __max_batch__(:write), do: unquote(Macro.escape(max_writes))
 
       def __modboss_schema__, do: unquote(mappings_with_normalized_conditions)
 

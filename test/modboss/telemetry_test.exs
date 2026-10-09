@@ -611,7 +611,7 @@ defmodule ModBoss.TelemetryTest do
 
       Code.compile_string("""
       defmodule #{schema} do
-        use ModBoss.Schema, max_batch_writes: [holding_registers: 1]
+        use ModBoss.Schema, max_batch_writes: [holding_register: 1]
 
         schema do
           holding_register 1, :first, mode: :w

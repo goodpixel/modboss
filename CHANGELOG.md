@@ -13,6 +13,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `batches` telemetry now counts the total number of batches the
   operation's addresses were divided into (i.e. the planned batches)
   rather than how many were actually attempted before a partial failure.
+- `:max_batch_reads`/`:max_batch_writes` schema options now use singular
+  object type keys (e.g. `max_batch_reads: [holding_register: 100]`)
+  instead of plural ones (e.g. `max_batch_reads: [holding_registers: 100]`).
+- Unrecognized keys and values that aren't positive integers in
+  `:max_batch_reads`/`:max_batch_writes` now raise a `CompileError` instead of
+  being silently ignored.
 
 ### Added
 

@@ -609,10 +609,10 @@ defmodule ModBossTest do
       Code.compile_string("""
       defmodule #{schema} do
         use ModBoss.Schema, max_batch_reads: [
-            holding_registers: #{max_holding_register_reads},
-            input_registers: #{max_input_register_reads},
-            coils: #{max_coil_reads},
-            discrete_inputs: #{max_discrete_input_reads}
+            holding_register: #{max_holding_register_reads},
+            input_register: #{max_input_register_reads},
+            coil: #{max_coil_reads},
+            discrete_input: #{max_discrete_input_reads}
           ]
 
         schema do
@@ -1535,7 +1535,7 @@ defmodule ModBossTest do
       # So they must be split into two reads, even though the gap is allowed.
       Code.compile_string("""
       defmodule #{schema} do
-        use ModBoss.Schema, max_batch_reads: [holding_registers: 6]
+        use ModBoss.Schema, max_batch_reads: [holding_register: 6]
 
         schema do
           holding_register 0..1, :group_1
@@ -2390,7 +2390,7 @@ defmodule ModBossTest do
 
       Code.compile_string("""
       defmodule #{schema} do
-        use ModBoss.Schema, max_batch_writes: %{holding_registers: 2, coils: 2}
+        use ModBoss.Schema, max_batch_writes: %{holding_register: 2, coil: 2}
 
         schema do
           holding_register 1, :holding_foo, mode: :w
