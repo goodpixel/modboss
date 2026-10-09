@@ -101,6 +101,30 @@ defmodule ModBoss.Schema do
   `ModBoss.Telemetry` exposes an `:unsupported` metric to track which mappings were
   excluded from any given read or write.
 
+  ## Batch sizes
+
+  ModBoss batches contiguous mappings of the same object type into a single
+  request, up to a maximum number of objects per request. By default, these
+  maximums are the limits set by the Modbus protocol:
+
+  | Object type         | Max per read | Max per write |
+  | ------------------- | ------------ | ------------- |
+  | `:holding_register` | 125          | 123           |
+  | `:input_register`   | 125          | —             |
+  | `:coil`             | 2000         | 1968          |
+  | `:discrete_input`   | 2000         | —             |
+
+  Some devices may only support smaller requests. To alter the maximums for
+  a given schema, pass `:max_batch_reads` and/or `:max_batch_writes` to `use
+  ModBoss.Schema`. Any object type you leave out keeps its default.
+
+      use ModBoss.Schema,
+        max_batch_reads: [holding_register: 50, coil: 100],
+        max_batch_writes: [holding_register: 20]
+
+  These limits can also be set at runtime via the `:max_batch` option on
+  `ModBoss.read/4` or `ModBoss.write/4`.
+
   ## Examples
 
       defmodule MyDevice.Schema do

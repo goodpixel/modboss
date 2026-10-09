@@ -693,6 +693,123 @@ defmodule ModBossTest do
       assert 2 = get_read_count(device)
     end
 
+    test "accepts `:max_batch` scalar to override the compiled batch size for all types" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema, max_batch_reads: [holding_register: 2, coil: 2]
+
+        schema do
+          holding_register 1, :holding_1
+          holding_register 2, :holding_2
+          holding_register 3, :holding_3
+
+          coil 1, :coil_1
+          coil 2, :coil_2
+          coil 3, :coil_3
+
+          input_register 1, :input_1
+          input_register 2, :input_2
+          input_register 3, :input_3
+
+          discrete_input 1, :discrete_1
+          discrete_input 2, :discrete_2
+          discrete_input 3, :discrete_3
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      for type <- @readable_types, i <- 1..3 do
+        set_objects(device, %{{type, i} => 1})
+      end
+
+      assert {:ok, _} = ModBoss.read(schema, :all, read_func(device))
+      assert 6 = get_read_count(device)
+
+      assert {:ok, _} = ModBoss.read(schema, :all, read_func(device), max_batch: 3)
+      assert 4 = get_read_count(device)
+
+      assert {:ok, _} = ModBoss.read(schema, :all, read_func(device), max_batch: 1)
+      assert 12 = get_read_count(device)
+    end
+
+    test "accepts `:max_batch` per type, falling back to the compiled batch size" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema, max_batch_reads: [holding_register: 2, coil: 2]
+
+        schema do
+          holding_register 1, :holding_1
+          holding_register 2, :holding_2
+          holding_register 3, :holding_3
+
+          coil 1, :coil_1
+          coil 2, :coil_2
+          coil 3, :coil_3
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      for type <- [:holding_register, :coil], i <- 1..3 do
+        set_objects(device, %{{type, i} => 1})
+      end
+
+      assert {:ok, _} =
+               ModBoss.read(schema, :all, read_func(device), max_batch: [holding_register: 3])
+
+      assert 3 = get_read_count(device)
+
+      assert {:ok, _} = ModBoss.read(schema, :all, read_func(device), max_batch: %{coil: 1})
+      assert 5 = get_read_count(device)
+    end
+
+    test "raises when a mapping exceeds the runtime `:max_batch`" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1..3, :foo
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, ~r/exceeds the max read batch size of 2/, fn ->
+        ModBoss.read(schema, :foo, read_func(device), max_batch: 2)
+      end
+    end
+
+    test "raises when `:max_batch` is invalid" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      invalid = [
+        0,
+        -1,
+        1.5,
+        "nope",
+        [holding_register: 0],
+        %{coil: "nope"},
+        [holding_registers: 1]
+      ]
+
+      for max_batch <- invalid do
+        assert_raise RuntimeError, ~r/Invalid max_batch/, fn ->
+          ModBoss.read(FakeSchema, :foo, read_func(device), max_batch: max_batch)
+        end
+      end
+    end
+
     test "reads mappings of different object types separately" do
       schema = unique_module()
 
@@ -2454,6 +2571,103 @@ defmodule ModBossTest do
 
       assert 2 = get_write_count(device)
       assert %{{:holding_register, 1} => 10, {:holding_register, 3} => 50} = get_objects(device)
+    end
+
+    test "accepts `:max_batch` scalar to override the compiled batch size for all types" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema, max_batch_writes: [holding_register: 2, coil: 2]
+
+        schema do
+          holding_register 1, :holding_1, mode: :w
+          holding_register 2, :holding_2, mode: :w
+          holding_register 3, :holding_3, mode: :w
+
+          coil 1, :coil_1, mode: :w
+          coil 2, :coil_2, mode: :w
+          coil 3, :coil_3, mode: :w
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      values = [holding_1: 1, holding_2: 1, holding_3: 1, coil_1: 1, coil_2: 1, coil_3: 1]
+
+      assert :ok = ModBoss.write(schema, values, write_func(device))
+      assert 4 = get_write_count(device)
+
+      assert :ok = ModBoss.write(schema, values, write_func(device), max_batch: 3)
+      assert 2 = get_write_count(device)
+
+      assert :ok = ModBoss.write(schema, values, write_func(device), max_batch: 1)
+      assert 6 = get_write_count(device)
+    end
+
+    test "accepts `:max_batch` per type, falling back to the compiled batch size" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema, max_batch_writes: [holding_register: 2, coil: 2]
+
+        schema do
+          holding_register 1, :holding_1, mode: :w
+          holding_register 2, :holding_2, mode: :w
+          holding_register 3, :holding_3, mode: :w
+
+          coil 1, :coil_1, mode: :w
+          coil 2, :coil_2, mode: :w
+          coil 3, :coil_3, mode: :w
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      values = [holding_1: 1, holding_2: 1, holding_3: 1, coil_1: 1, coil_2: 1, coil_3: 1]
+
+      assert :ok =
+               ModBoss.write(schema, values, write_func(device), max_batch: [holding_register: 3])
+
+      assert 3 = get_write_count(device)
+
+      assert :ok = ModBoss.write(schema, values, write_func(device), max_batch: %{coil: 1})
+      assert 5 = get_write_count(device)
+    end
+
+    test "raises when a mapping exceeds the runtime `:max_batch`" do
+      schema = unique_module()
+
+      Code.compile_string("""
+      defmodule #{schema} do
+        use ModBoss.Schema
+
+        schema do
+          holding_register 1..3, :foo, mode: :w
+        end
+      end
+      """)
+
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      assert_raise RuntimeError, ~r/exceeds the max write batch size of 2/, fn ->
+        ModBoss.write(schema, [foo: [1, 2, 3]], write_func(device), max_batch: 2)
+      end
+    end
+
+    test "raises when `:max_batch` is invalid" do
+      device = start_supervised!({Agent, fn -> @initial_state end})
+
+      invalid = [0, -1, 1.5, "nope", [holding_register: 0], %{coil: "nope"}, [input_register: 1]]
+
+      for max_batch <- invalid do
+        assert_raise RuntimeError, ~r/Invalid max_batch/, fn ->
+          ModBoss.write(FakeSchema, [baz: 99], write_func(device), max_batch: max_batch)
+        end
+      end
     end
 
     test "max_attempts retries on error and succeeds" do

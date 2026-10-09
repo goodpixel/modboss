@@ -22,6 +22,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Add a `:max_batch` option to `ModBoss.read/4` and `ModBoss.write/4`, which overrides
+  the schema's `:max_batch_reads`/`:max_batch_writes` at runtime. Accepts a single
+  integer (applies to all types) or per-type values; types left out fall back to the
+  schema's limits.
 - Add the `:if` schema option, allowing mappings to be conditionally supported at runtime
   based on context. Unsupported mappings are short-circuited; they are neither read nor written
   during `ModBoss.read/4` or `ModBoss.write/4`, and they are dropped from `ModBoss.encode/3`.
