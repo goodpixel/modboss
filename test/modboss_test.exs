@@ -12,21 +12,9 @@ defmodule ModBossTest do
       holding_register 1, :foo
       holding_register 2, :bar, mode: :r
       holding_register 3, :baz, mode: :w
-      holding_register 4, :blah, mode: :rw
       holding_register 10..12, :qux, mode: :rw
       holding_register 13..14, :quux, mode: :rw
       holding_register 15, :corge, mode: :rw
-
-      coil 100, :grault, mode: :rw
-      coil 101, :garply, mode: :rw
-
-      # max 120 writes per batch, so making a giant mapping to test that
-      coil 201..320, :maximus, mode: :rw
-      coil 321, :trop, mode: :rw
-
-      input_register 400, :waldo
-
-      discrete_input 500, :fred
     end
   end
 
@@ -2397,7 +2385,6 @@ defmodule ModBossTest do
              } = get_objects(device)
     end
 
-    # TODO: implication: mappings larger than the max batch size will fail
     test "doesn't split writes for a single mapping across batches" do
       schema = unique_module()
 
