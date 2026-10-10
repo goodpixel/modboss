@@ -114,7 +114,7 @@ defmodule ModBoss.Schema do
   | `:coil`             | 2000         | 1968          |
   | `:discrete_input`   | 2000         | —             |
 
-  Some devices may only support smaller requests. To alter the maximums for
+  Some devices may only support smaller requests. To lower the maximums for
   a given schema, pass `:max_batch_reads` and/or `:max_batch_writes` to `use
   ModBoss.Schema`. Any object type you leave out keeps its default.
 
@@ -159,8 +159,9 @@ defmodule ModBoss.Schema do
   alias ModBoss.Mapping
 
   defmacro __using__(opts) do
-    max_reads = Keyword.get(opts, :max_batch_reads, [])
-    max_writes = Keyword.get(opts, :max_batch_writes, [])
+    opts = Keyword.validate!(opts, max_batch_reads: [], max_batch_writes: [])
+    max_reads = Keyword.fetch!(opts, :max_batch_reads)
+    max_writes = Keyword.fetch!(opts, :max_batch_writes)
 
     quote do
       import unquote(__MODULE__), only: [schema: 1]
@@ -364,36 +365,64 @@ defmodule ModBoss.Schema do
     end
   end
 
-  defp resolve_max_batch!(env, opt, defaults) do
-    env.module
-    |> Module.get_attribute(opt)
-    |> Enum.into(defaults, fn
-      {type, limit} when is_map_key(defaults, type) and is_integer(limit) and limit > 0 ->
-        {type, limit}
+  # The limits set by the Modbus protocol, which also serve as the defaults
+  @protocol_max_batch %{
+    read: %{holding_register: 125, input_register: 125, coil: 2000, discrete_input: 2000},
+    write: %{holding_register: 123, coil: 1968}
+  }
 
-      invalid ->
+  @doc false
+  # Validates per-type batch limits (a keyword list or map) for the given mode.
+  # Returns only the given limits; callers merge them over their own defaults.
+  def validate_max_batch(limits, mode) when is_map(limits) do
+    validate_max_batch(Map.to_list(limits), mode)
+  end
+
+  def validate_max_batch(limits, mode) when is_list(limits) do
+    protocol_limits = Map.fetch!(@protocol_max_batch, mode)
+    types = Map.keys(protocol_limits)
+
+    with true <- Keyword.keyword?(limits) || {:error, "value #{inspect(limits)}"},
+         {:ok, limits} <- validate_types(limits, types) do
+      Enum.find_value(limits, {:ok, Map.new(limits)}, fn {type, limit} ->
+        max = Map.fetch!(protocol_limits, type)
+
+        if not (is_integer(limit) and limit in 1..max) do
+          {:error,
+           "entry #{inspect({type, limit})}. Expected a positive integer no greater than #{max}"}
+        end
+      end)
+    end
+  end
+
+  def validate_max_batch(limits, _mode), do: {:error, "value #{inspect(limits)}"}
+
+  defp validate_types(limits, types) do
+    case Keyword.validate(limits, types) do
+      {:ok, _} ->
+        {:ok, limits}
+
+      {:error, invalid} ->
+        {:error, "types #{inspect(invalid)}. Expected each of #{inspect(types)} at most once"}
+    end
+  end
+
+  defp resolve_max_batch!(env, opt, mode) do
+    case env.module |> Module.get_attribute(opt) |> validate_max_batch(mode) do
+      {:ok, limits} ->
+        Map.merge(Map.fetch!(@protocol_max_batch, mode), limits)
+
+      {:error, reason} ->
         raise CompileError,
           file: env.file,
           line: env.line,
-          description: """
-          Invalid #{inspect(opt)} entry: #{inspect(invalid)}. \
-          Expected one of #{inspect(Map.keys(defaults))} with a positive integer.\
-          """
-    end)
+          description: "Invalid #{inspect(opt)} #{reason}."
+    end
   end
 
-  @default_max_batch_reads %{
-    holding_register: 125,
-    input_register: 125,
-    coil: 2000,
-    discrete_input: 2000
-  }
-
-  @default_max_batch_writes %{holding_register: 123, coil: 1968}
-
   defmacro __before_compile__(env) do
-    max_reads = resolve_max_batch!(env, :max_batch_reads, @default_max_batch_reads)
-    max_writes = resolve_max_batch!(env, :max_batch_writes, @default_max_batch_writes)
+    max_reads = resolve_max_batch!(env, :max_batch_reads, :read)
+    max_writes = resolve_max_batch!(env, :max_batch_writes, :write)
 
     mappings = Module.get_attribute(env.module, :modboss_mappings)
 

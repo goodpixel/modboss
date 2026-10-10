@@ -176,19 +176,15 @@ defmodule ModBoss do
         names when is_list(names) -> {names, :plural}
       end
 
-    {supported_opts, unsupported_opts} =
-      Keyword.split(opts, [:max_gap, :max_batch, :max_attempts, :debug, :decode, :context])
-
-    if unsupported_opts != [] do
-      raise "Unrecognized opts: #{inspect(unsupported_opts)}"
-    end
+    opts =
+      Keyword.validate!(opts, [:max_gap, :max_batch, :max_attempts, :debug, :decode, :context])
 
     validated_opts =
-      supported_opts
+      opts
       |> Enum.into(@default_read_opts)
       |> Map.put(:plurality, plurality)
-      |> Map.put(:max_gap, normalize_max_gap(supported_opts[:max_gap]))
-      |> Map.put(:max_batch, normalize_max_batch(module, :read, supported_opts[:max_batch]))
+      |> Map.put(:max_gap, normalize_max_gap(opts[:max_gap]))
+      |> Map.put(:max_batch, normalize_max_batch(module, :read, opts[:max_batch]))
       |> validate!(:max_attempts)
       |> validate!(:context)
 
@@ -585,11 +581,7 @@ defmodule ModBoss do
   @default_write_opts %{max_attempts: 1, context: %{}}
 
   defp evaluate_write_opts(module, opts) do
-    {opts, remaining_opts} = Keyword.split(opts, [:max_batch, :max_attempts, :context])
-
-    if remaining_opts != [] do
-      raise "Unrecognized opts: #{inspect(remaining_opts)}"
-    end
+    opts = Keyword.validate!(opts, [:max_batch, :max_attempts, :context])
 
     opts
     |> Enum.into(@default_write_opts)
@@ -839,24 +831,16 @@ defmodule ModBoss do
 
   defp normalize_max_batch(module, mode, nil), do: module.__max_batch__(mode)
 
-  defp normalize_max_batch(module, mode, size) when is_integer(size) and size > 0 do
-    Map.new(module.__max_batch__(mode), fn {type, _size} -> {type, size} end)
+  defp normalize_max_batch(module, mode, size) when is_integer(size) do
+    sizes = Map.new(module.__max_batch__(mode), fn {type, _size} -> {type, size} end)
+    normalize_max_batch(module, mode, sizes)
   end
 
-  defp normalize_max_batch(module, mode, sizes) when is_list(sizes) or is_map(sizes) do
-    compiled = module.__max_batch__(mode)
-
-    Enum.into(sizes, compiled, fn
-      {type, size} when is_map_key(compiled, type) and is_integer(size) and size > 0 ->
-        {type, size}
-
-      invalid ->
-        raise "Invalid max_batch entry for #{mode}: #{inspect(invalid)}"
-    end)
-  end
-
-  defp normalize_max_batch(_module, _mode, value) do
-    raise "Invalid max_batch value: #{inspect(value)}"
+  defp normalize_max_batch(module, mode, sizes) do
+    case Schema.validate_max_batch(sizes, mode) do
+      {:ok, sizes} -> Map.merge(module.__max_batch__(mode), sizes)
+      {:error, reason} -> raise "Invalid max_batch for #{mode}: #{reason}."
+    end
   end
 
   defp encode_chunked_mappings(chunked_mappings, context) do

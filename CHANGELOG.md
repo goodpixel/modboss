@@ -16,16 +16,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `:max_batch_reads`/`:max_batch_writes` schema options now use singular
   object type keys (e.g. `max_batch_reads: [holding_register: 100]`)
   instead of plural ones (e.g. `max_batch_reads: [holding_registers: 100]`).
-- Unrecognized keys and values that aren't positive integers in
-  `:max_batch_reads`/`:max_batch_writes` now raise a `CompileError` instead of
-  being silently ignored.
+- Unrecognized or duplicate keys, and values that aren't positive integers within
+  the Modbus protocol limits, in `:max_batch_reads`/`:max_batch_writes` now raise a
+  `CompileError` instead of being silently ignored.
+- Unrecognized or duplicate options to `use ModBoss.Schema` now raise an `ArgumentError`
+  instead of being silently ignored.
+- Unrecognized or duplicate opts passed to `ModBoss.read/4` and `ModBoss.write/4` now raise
+  an `ArgumentError` (previously a `RuntimeError` for unrecognized opts; duplicates were
+  accepted).
 
 ### Added
 
 - Add a `:max_batch` option to `ModBoss.read/4` and `ModBoss.write/4`, which overrides
   the schema's `:max_batch_reads`/`:max_batch_writes` at runtime. Accepts a single
   integer (applies to all types) or per-type values; types left out fall back to the
-  schema's limits.
+  schema's limits. Values may exceed the schema's limits but not the Modbus protocol limits.
 - Add the `:if` schema option, allowing mappings to be conditionally supported at runtime
   based on context. Unsupported mappings are short-circuited; they are neither read nor written
   during `ModBoss.read/4` or `ModBoss.write/4`, and they are dropped from `ModBoss.encode/3`.

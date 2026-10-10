@@ -791,8 +791,6 @@ defmodule ModBossTest do
     end
 
     test "raises when `:max_batch` is invalid" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
-
       invalid = [
         0,
         -1,
@@ -800,13 +798,37 @@ defmodule ModBossTest do
         "nope",
         [holding_register: 0],
         %{coil: "nope"},
-        [holding_registers: 1]
+        [holding_registers: 1],
+        [holding_register: 1, holding_register: 2],
+        126,
+        [holding_register: 126],
+        [input_register: 126],
+        [coil: 2001],
+        [discrete_input: 2001]
       ]
 
       for max_batch <- invalid do
         assert_raise RuntimeError, ~r/Invalid max_batch/, fn ->
-          ModBoss.read(FakeSchema, :foo, read_func(device), max_batch: max_batch)
+          ModBoss.read(FakeSchema, :foo, unreachable_callback(), max_batch: max_batch)
         end
+      end
+    end
+
+    test "lists the valid types when `:max_batch` has an unrecognized type" do
+      assert_raise RuntimeError, ~r/\[:holding_registers\].*:holding_register\b/, fn ->
+        ModBoss.read(FakeSchema, :foo, unreachable_callback(), max_batch: [holding_registers: 1])
+      end
+    end
+
+    test "raises on duplicate opts" do
+      assert_raise ArgumentError, ~r/duplicate keys \[:max_batch\]/, fn ->
+        ModBoss.read(FakeSchema, :foo, unreachable_callback(), max_batch: 5, max_batch: 1)
+      end
+    end
+
+    test "raises on unrecognized opts" do
+      assert_raise ArgumentError, ~r/unknown keys \[:max_batches\]/, fn ->
+        ModBoss.read(FakeSchema, :foo, unreachable_callback(), max_batches: 5)
       end
     end
 
@@ -2659,14 +2681,39 @@ defmodule ModBossTest do
     end
 
     test "raises when `:max_batch` is invalid" do
-      device = start_supervised!({Agent, fn -> @initial_state end})
-
-      invalid = [0, -1, 1.5, "nope", [holding_register: 0], %{coil: "nope"}, [input_register: 1]]
+      invalid = [
+        0,
+        -1,
+        1.5,
+        "nope",
+        [holding_register: 0],
+        %{coil: "nope"},
+        [input_register: 1],
+        [coil: 1, coil: 2],
+        124,
+        [holding_register: 124],
+        [coil: 1969]
+      ]
 
       for max_batch <- invalid do
         assert_raise RuntimeError, ~r/Invalid max_batch/, fn ->
-          ModBoss.write(FakeSchema, [baz: 99], write_func(device), max_batch: max_batch)
+          ModBoss.write(FakeSchema, [baz: 99], unreachable_callback(), max_batch: max_batch)
         end
+      end
+    end
+
+    test "raises on duplicate opts" do
+      assert_raise ArgumentError, ~r/duplicate keys \[:max_attempts\]/, fn ->
+        ModBoss.write(FakeSchema, [baz: 99], unreachable_callback(),
+          max_attempts: 1,
+          max_attempts: 2
+        )
+      end
+    end
+
+    test "raises on unrecognized opts" do
+      assert_raise ArgumentError, ~r/unknown keys \[:max_gap\]/, fn ->
+        ModBoss.write(FakeSchema, [baz: 99], unreachable_callback(), max_gap: 5)
       end
     end
 
@@ -2895,6 +2942,10 @@ defmodule ModBossTest do
   # Getting the read count also resets it
   defp get_read_count(device) when is_pid(device) do
     Agent.get_and_update(device, fn state -> {state.reads, %{state | reads: 0}} end)
+  end
+
+  defp unreachable_callback do
+    fn _type, _starting_address, _count_or_values -> flunk("callback should not be invoked") end
   end
 
   defp read_func(device) when is_pid(device) do

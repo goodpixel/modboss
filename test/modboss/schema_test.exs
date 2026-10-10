@@ -643,6 +643,78 @@ defmodule ModBoss.SchemaTest do
         end
       end
     end
+
+    test "raises an exception for duplicate types" do
+      for opt <- [:max_batch_reads, :max_batch_writes] do
+        assert_raise CompileError, ~r/#{opt}.*\[:holding_register\]/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, #{opt}: [holding_register: 1, holding_register: 2]
+          end
+          """)
+        end
+      end
+    end
+
+    test "accepts values up to the Modbus protocol limits" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema,
+          max_batch_reads: [holding_register: 125, input_register: 125, coil: 2000, discrete_input: 2000],
+          max_batch_writes: [holding_register: 123, coil: 1968]
+      end
+      """)
+
+      assert module.__max_batch__(:read) ==
+               %{holding_register: 125, input_register: 125, coil: 2000, discrete_input: 2000}
+
+      assert module.__max_batch__(:write) == %{holding_register: 123, coil: 1968}
+    end
+
+    test "raises an exception for values above the Modbus protocol limits" do
+      above_limits = [
+        max_batch_reads: [holding_register: 126],
+        max_batch_reads: [input_register: 126],
+        max_batch_reads: [coil: 2001],
+        max_batch_reads: [discrete_input: 2001],
+        max_batch_writes: [holding_register: 124],
+        max_batch_writes: [coil: 1969]
+      ]
+
+      for {opt, [{type, value}]} <- above_limits do
+        assert_raise CompileError, ~r/#{opt}.*#{type}.*#{value}/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, #{opt}: [#{type}: #{value}]
+          end
+          """)
+        end
+      end
+    end
+
+    test "raises an exception for unrecognized options" do
+      for opt <- ["max_batch: 10", "max_batch_read: [holding_register: 2]"] do
+        assert_raise ArgumentError, ~r/unknown keys/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, #{opt}
+          end
+          """)
+        end
+      end
+    end
+
+    test "raises an exception for duplicate options" do
+      assert_raise ArgumentError, ~r/duplicate keys \[:max_batch_reads\]/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema, max_batch_reads: [coil: 1], max_batch_reads: [coil: 2]
+        end
+        """)
+      end
+    end
   end
 
   defp unique_module do
