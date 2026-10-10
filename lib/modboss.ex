@@ -17,7 +17,9 @@ defmodule ModBoss do
   alias ModBoss.Mapping
   alias ModBoss.Schema
 
-  @typep mode :: :readable | :writable | :any
+  @typep mode :: :read | :write
+  @typep access :: :readable | :writable | :any
+  @typep max_batch :: %{atom() => pos_integer()}
 
   @type read_func :: (Mapping.object_type(),
                       starting_address :: Mapping.address(),
@@ -57,6 +59,11 @@ defmodule ModBoss do
       mappings will be included in gap reads. To opt a readable mapping out of
       gap reads, specify `gap_safe: false` on that mapping. See the `:gap_safe`
       option in `ModBoss.Schema` for details.
+    * `:max_batch` — the maximum number of objects to read in a single request.
+      Overrides the schema's `:max_batch_reads` (see "Batch sizes" in
+      `ModBoss.Schema`). This value can be specified as a single integer (which
+      applies to all types) or per object type. Types left out fall back to the
+      schema's limits.
     * `:debug` — if `true`, returns a map of mapping details instead of just the value;
       defaults to `false`
     * `:decode` — if `false`, ModBoss doesn't attempt to decode the retrieved values;
@@ -135,6 +142,10 @@ defmodule ModBoss do
       ModBoss.read(SchemaModule, [:foo, :bar], read_func, max_gap: %{holding_register: 10})
       {:ok, %{foo: 75, bar: "ABC"}}
 
+      # Limit the number of objects read per request
+      ModBoss.read(SchemaModule, :all, read_func, max_batch: 10)
+      {:ok, %{foo: 75, bar: "ABC", baz: true, qux: 1024}}
+
       # Get "raw" Modbus values (as returned by `read_func`)
       ModBoss.read(SchemaModule, [:foo, :bar], read_func, decode: false)
       {:ok, %{foo: [75], bar: [16706, 17152]}}
@@ -165,18 +176,15 @@ defmodule ModBoss do
         names when is_list(names) -> {names, :plural}
       end
 
-    {supported_opts, unsupported_opts} =
-      Keyword.split(opts, [:max_gap, :max_attempts, :debug, :decode, :context])
-
-    if unsupported_opts != [] do
-      raise "Unrecognized opts: #{inspect(unsupported_opts)}"
-    end
+    opts =
+      Keyword.validate!(opts, [:max_gap, :max_batch, :max_attempts, :debug, :decode, :context])
 
     validated_opts =
-      supported_opts
+      opts
       |> Enum.into(@default_read_opts)
       |> Map.put(:plurality, plurality)
-      |> Map.put(:max_gap, normalize_max_gap(supported_opts[:max_gap]))
+      |> Map.put(:max_gap, normalize_max_gap(opts[:max_gap]))
+      |> Map.put(:max_batch, normalize_max_batch(module, :read, opts[:max_batch]))
       |> validate!(:max_attempts)
       |> validate!(:context)
 
@@ -222,7 +230,7 @@ defmodule ModBoss do
       |> fill_gaps(module, opts)
       |> Enum.split_with(& &1.supported)
 
-    chunks = chunk_mappings(supported, module, :read)
+    chunks = chunk_mappings(supported, opts.max_batch, :read)
     {read_result, stats} = read_chunks(chunks, module, read_func, opts)
 
     stats =
@@ -288,8 +296,8 @@ defmodule ModBoss do
 
   defp get_gap_mappings(module, prior, next, context) do
     gap_mappings =
-      module
-      |> Schema.contiguous_mappings(prior)
+      prior
+      |> Schema.contiguous_mappings(module)
       |> Stream.map(&Mapping.evaluate_support(&1, context))
       |> Enum.take_while(fn mapping ->
         mapping.gap_safe and mapping.supported and address_after(mapping) <= next.starting_address
@@ -529,6 +537,11 @@ defmodule ModBoss do
   > the function will immediately abort, and any subsequent writes will be skipped.
 
   ## Opts
+    * `:max_batch` — the maximum number of objects to write in a single request.
+      Overrides the schema's `:max_batch_writes` (see "Batch sizes" in
+      `ModBoss.Schema`). This value can be specified as a single integer (which
+      applies to all types) or per object type (`:holding_register` or `:coil`).
+      Types left out fall back to the schema's limits.
     * `:max_attempts` — maximum number of times each `write_func` callback will
       be attempted before giving up. Defaults to `1` (no retries). Only
       `{:error, _}` triggers a retry; exceptions are not retried.
@@ -554,7 +567,7 @@ defmodule ModBoss do
   def write(module, values, write_func, opts \\ [])
       when is_atom(module) and is_function(write_func) do
     names = get_keys(values)
-    opts = evaluate_write_opts(opts)
+    opts = evaluate_write_opts(module, opts)
 
     with {:ok, mappings} <- get_mappings(:writable, module, names),
          mappings <- put_values(mappings, values) do
@@ -567,15 +580,12 @@ defmodule ModBoss do
 
   @default_write_opts %{max_attempts: 1, context: %{}}
 
-  defp evaluate_write_opts(opts) do
-    {opts, remaining_opts} = Keyword.split(opts, [:max_attempts, :context])
-
-    if remaining_opts != [] do
-      raise "Unrecognized opts: #{inspect(remaining_opts)}"
-    end
+  defp evaluate_write_opts(module, opts) do
+    opts = Keyword.validate!(opts, [:max_batch, :max_attempts, :context])
 
     opts
     |> Enum.into(@default_write_opts)
+    |> Map.put(:max_batch, normalize_max_batch(module, :write, opts[:max_batch]))
     |> validate!(:max_attempts)
     |> validate!(:context)
   end
@@ -586,8 +596,8 @@ defmodule ModBoss do
     end
   end
 
-  @spec get_mappings(mode(), module(), list()) :: {:ok, [Mapping.t()]} | {:error, String.t()}
-  defp get_mappings(mode, module, mapping_names) when is_list(mapping_names) do
+  @spec get_mappings(access(), module(), list()) :: {:ok, [Mapping.t()]} | {:error, String.t()}
+  defp get_mappings(access, module, mapping_names) when is_list(mapping_names) do
     schema = module.__modboss_schema__()
 
     {mappings, unknown_names} =
@@ -600,11 +610,11 @@ defmodule ModBoss do
         names = unknown_names |> Enum.map_join(", ", fn name -> inspect(name) end)
         {:error, "Unknown mapping(s) #{names} for #{inspect(module)}."}
 
-      mode == :readable and Enum.any?(unreadable(mappings)) ->
+      access == :readable and Enum.any?(unreadable(mappings)) ->
         names = unreadable(mappings) |> Enum.map_join(", ", fn %{name: name} -> inspect(name) end)
         {:error, "ModBoss Mapping(s) #{names} in #{inspect(module)} are not readable."}
 
-      mode == :writable and Enum.any?(unwritable(mappings)) ->
+      access == :writable and Enum.any?(unwritable(mappings)) ->
         names = unwritable(mappings) |> Enum.map_join(", ", fn %{name: name} -> inspect(name) end)
         {:error, "ModBoss Mapping(s) #{names} in #{inspect(module)} are not writable."}
 
@@ -649,7 +659,7 @@ defmodule ModBoss do
       |> Enum.sort_by(& &1.starting_address)
       |> Enum.split_with(& &1.supported)
 
-    chunks = chunk_mappings(supported, module, :write)
+    chunks = chunk_mappings(supported, opts.max_batch, :write)
     initial_stats = %{callback_invocations: 0, retries: 0}
 
     {write_result, stats} =
@@ -746,13 +756,13 @@ defmodule ModBoss do
   defp validate!(%{context: c} = opts, :context) when is_map(c), do: opts
   defp validate!(opts, opt), do: raise("Invalid option #{inspect([{opt, opts[opt]}])}.")
 
-  @spec chunk_mappings([Mapping.t()], module(), :read | :write) :: [[Mapping.t()]]
-  defp chunk_mappings(mappings, module, mode) do
+  @spec chunk_mappings([Mapping.t()], max_batch(), mode()) :: [[Mapping.t()]]
+  defp chunk_mappings(mappings, max_batch, mode) do
     initial_acc = {_mappings = [], _address_count = 0}
 
     chunk_fun = fn
       %Mapping{supported: true} = mapping, acc ->
-        max_chunk = module.__max_batch__(mode, mapping.type)
+        max_chunk = Map.fetch!(max_batch, mapping.type)
 
         if mapping.address_count > max_chunk do
           raise "Modbus mapping #{inspect(mapping.name)} exceeds the max #{mode} batch size of #{max_chunk} objects."
@@ -817,6 +827,20 @@ defmodule ModBoss do
       coil: size,
       discrete_input: size
     }
+  end
+
+  defp normalize_max_batch(module, mode, nil), do: module.__max_batch__(mode)
+
+  defp normalize_max_batch(module, mode, size) when is_integer(size) do
+    sizes = Map.new(module.__max_batch__(mode), fn {type, _size} -> {type, size} end)
+    normalize_max_batch(module, mode, sizes)
+  end
+
+  defp normalize_max_batch(module, mode, sizes) do
+    case Schema.validate_max_batch(sizes, mode) do
+      {:ok, sizes} -> Map.merge(module.__max_batch__(mode), sizes)
+      {:error, reason} -> raise "Invalid max_batch for #{mode}: #{reason}."
+    end
   end
 
   defp encode_chunked_mappings(chunked_mappings, context) do

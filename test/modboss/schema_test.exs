@@ -548,15 +548,15 @@ defmodule ModBoss.SchemaTest do
         qux = mapping(module, :qux)
 
         assert [:bar, :baz, :qux] =
-                 Schema.contiguous_mappings(module, foo)
+                 Schema.contiguous_mappings(foo, module)
                  |> Enum.map(fn %Mapping{name: name} -> name end)
 
         assert [:qux] =
-                 Schema.contiguous_mappings(module, baz)
+                 Schema.contiguous_mappings(baz, module)
                  |> Enum.map(fn %Mapping{name: name} -> name end)
 
         assert [] =
-                 Schema.contiguous_mappings(module, qux)
+                 Schema.contiguous_mappings(qux, module)
                  |> Enum.map(fn %Mapping{name: name} -> name end)
       end
     end
@@ -578,8 +578,142 @@ defmodule ModBoss.SchemaTest do
       foo = mapping(module, :foo)
 
       assert [] =
-               Schema.contiguous_mappings(module, foo)
+               Schema.contiguous_mappings(foo, module)
                |> Enum.map(fn %Mapping{name: name} -> name end)
+    end
+  end
+
+  describe "max batch options" do
+    test "accepts per-type read limits keyed by object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema,
+          max_batch_reads: [holding_register: 1, input_register: 2, coil: 3, discrete_input: 4]
+      end
+      """)
+
+      assert module.__max_batch__(:read) ==
+               %{holding_register: 1, input_register: 2, coil: 3, discrete_input: 4}
+    end
+
+    test "accepts per-type write limits keyed by object type" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema, max_batch_writes: %{holding_register: 1, coil: 2}
+      end
+      """)
+
+      assert module.__max_batch__(:write) == %{holding_register: 1, coil: 2}
+    end
+
+    test "raises an exception for unrecognized read types" do
+      assert_raise CompileError, ~r/max_batch_reads.*:holding_registers/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema, max_batch_reads: [holding_registers: 1]
+        end
+        """)
+      end
+    end
+
+    test "raises an exception for types that can't be written" do
+      for type <- [:input_register, :discrete_input] do
+        assert_raise CompileError, ~r/max_batch_writes.*#{inspect(type)}/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, max_batch_writes: [#{type}: 1]
+          end
+          """)
+        end
+      end
+    end
+
+    test "raises an exception for values that aren't positive integers" do
+      for opt <- [:max_batch_reads, :max_batch_writes], value <- [0, -1, 1.5, ":foo"] do
+        assert_raise CompileError, ~r/#{opt}.*#{Regex.escape(to_string(value))}/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, #{opt}: [holding_register: #{value}]
+          end
+          """)
+        end
+      end
+    end
+
+    test "raises an exception for duplicate types" do
+      for opt <- [:max_batch_reads, :max_batch_writes] do
+        assert_raise CompileError, ~r/#{opt}.*\[:holding_register\]/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, #{opt}: [holding_register: 1, holding_register: 2]
+          end
+          """)
+        end
+      end
+    end
+
+    test "accepts values up to the Modbus protocol limits" do
+      module = unique_module()
+
+      Code.compile_string("""
+      defmodule #{module} do
+        use ModBoss.Schema,
+          max_batch_reads: [holding_register: 125, input_register: 125, coil: 2000, discrete_input: 2000],
+          max_batch_writes: [holding_register: 123, coil: 1968]
+      end
+      """)
+
+      assert module.__max_batch__(:read) ==
+               %{holding_register: 125, input_register: 125, coil: 2000, discrete_input: 2000}
+
+      assert module.__max_batch__(:write) == %{holding_register: 123, coil: 1968}
+    end
+
+    test "raises an exception for values above the Modbus protocol limits" do
+      above_limits = [
+        max_batch_reads: [holding_register: 126],
+        max_batch_reads: [input_register: 126],
+        max_batch_reads: [coil: 2001],
+        max_batch_reads: [discrete_input: 2001],
+        max_batch_writes: [holding_register: 124],
+        max_batch_writes: [coil: 1969]
+      ]
+
+      for {opt, [{type, value}]} <- above_limits do
+        assert_raise CompileError, ~r/#{opt}.*#{type}.*#{value}/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, #{opt}: [#{type}: #{value}]
+          end
+          """)
+        end
+      end
+    end
+
+    test "raises an exception for unrecognized options" do
+      for opt <- ["max_batch: 10", "max_batch_read: [holding_register: 2]"] do
+        assert_raise ArgumentError, ~r/unknown keys/, fn ->
+          Code.compile_string("""
+          defmodule #{unique_module()} do
+            use ModBoss.Schema, #{opt}
+          end
+          """)
+        end
+      end
+    end
+
+    test "raises an exception for duplicate options" do
+      assert_raise ArgumentError, ~r/duplicate keys \[:max_batch_reads\]/, fn ->
+        Code.compile_string("""
+        defmodule #{unique_module()} do
+          use ModBoss.Schema, max_batch_reads: [coil: 1], max_batch_reads: [coil: 2]
+        end
+        """)
+      end
     end
   end
 

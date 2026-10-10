@@ -101,6 +101,30 @@ defmodule ModBoss.Schema do
   `ModBoss.Telemetry` exposes an `:unsupported` metric to track which mappings were
   excluded from any given read or write.
 
+  ## Batch sizes
+
+  ModBoss batches contiguous mappings of the same object type into a single
+  request, up to a maximum number of objects per request. By default, these
+  maximums are the limits set by the Modbus protocol:
+
+  | Object type         | Max per read | Max per write |
+  | ------------------- | ------------ | ------------- |
+  | `:holding_register` | 125          | 123           |
+  | `:input_register`   | 125          | —             |
+  | `:coil`             | 2000         | 1968          |
+  | `:discrete_input`   | 2000         | —             |
+
+  Some devices may only support smaller requests. To lower the maximums for
+  a given schema, pass `:max_batch_reads` and/or `:max_batch_writes` to `use
+  ModBoss.Schema`. Any object type you leave out keeps its default.
+
+      use ModBoss.Schema,
+        max_batch_reads: [holding_register: 50, coil: 100],
+        max_batch_writes: [holding_register: 20]
+
+  These limits can also be set at runtime via the `:max_batch` option on
+  `ModBoss.read/4` or `ModBoss.write/4`.
+
   ## Examples
 
       defmodule MyDevice.Schema do
@@ -135,16 +159,17 @@ defmodule ModBoss.Schema do
   alias ModBoss.Mapping
 
   defmacro __using__(opts) do
-    max_reads = Keyword.get(opts, :max_batch_reads, [])
-    max_writes = Keyword.get(opts, :max_batch_writes, [])
+    opts = Keyword.validate!(opts, max_batch_reads: [], max_batch_writes: [])
+    max_reads = Keyword.fetch!(opts, :max_batch_reads)
+    max_writes = Keyword.fetch!(opts, :max_batch_writes)
 
     quote do
       import unquote(__MODULE__), only: [schema: 1]
 
       Module.register_attribute(__MODULE__, :modboss_mappings, accumulate: true)
       Module.register_attribute(__MODULE__, :modboss_mapping_support, accumulate: true)
-      Module.put_attribute(__MODULE__, :max_reads_per_batch, unquote(max_reads))
-      Module.put_attribute(__MODULE__, :max_writes_per_batch, unquote(max_writes))
+      Module.put_attribute(__MODULE__, :max_batch_reads, unquote(max_reads))
+      Module.put_attribute(__MODULE__, :max_batch_writes, unquote(max_writes))
 
       @before_compile unquote(__MODULE__)
     end
@@ -247,12 +272,8 @@ defmodule ModBoss.Schema do
     define_mapping(__CALLER__, :discrete_input, addresses, name, opts)
   end
 
-  @doc """
-  Returns a stream of contiguous mappings immediately following `mapping`
-
-  The stream aborts when it reaches an address with no defined Mapping.
-  """
-  def contiguous_mappings(module, %Mapping{type: object_type} = prior_mapping) do
+  @doc false
+  def contiguous_mappings(%Mapping{type: object_type} = prior_mapping, module) do
     Stream.unfold(prior_mapping, fn prior ->
       next_address = prior.starting_address + prior.address_count
 
@@ -344,17 +365,65 @@ defmodule ModBoss.Schema do
     end
   end
 
+  # The limits set by the Modbus protocol, which also serve as the defaults
+  @protocol_max_batch %{
+    read: %{holding_register: 125, input_register: 125, coil: 2000, discrete_input: 2000},
+    write: %{holding_register: 123, coil: 1968}
+  }
+
+  @doc false
+  # Validates per-type batch limits (a keyword list or map) for the given mode.
+  # Returns only the given limits; callers merge them over their own defaults.
+  def validate_max_batch(limits, mode) when is_map(limits) do
+    validate_max_batch(Map.to_list(limits), mode)
+  end
+
+  def validate_max_batch(limits, mode) when is_list(limits) do
+    protocol_limits = Map.fetch!(@protocol_max_batch, mode)
+    types = Map.keys(protocol_limits)
+
+    with true <- Keyword.keyword?(limits) || {:error, "value #{inspect(limits)}"},
+         {:ok, limits} <- validate_types(limits, types) do
+      Enum.find_value(limits, {:ok, Map.new(limits)}, fn {type, limit} ->
+        max = Map.fetch!(protocol_limits, type)
+
+        if not (is_integer(limit) and limit in 1..max) do
+          {:error,
+           "entry #{inspect({type, limit})}. Expected a positive integer no greater than #{max}"}
+        end
+      end)
+    end
+  end
+
+  def validate_max_batch(limits, _mode), do: {:error, "value #{inspect(limits)}"}
+
+  defp validate_types(limits, types) do
+    case Keyword.validate(limits, types) do
+      {:ok, _} ->
+        {:ok, limits}
+
+      {:error, invalid} ->
+        {:error, "types #{inspect(invalid)}. Expected each of #{inspect(types)} at most once"}
+    end
+  end
+
+  defp resolve_max_batch!(env, opt, mode) do
+    case env.module |> Module.get_attribute(opt) |> validate_max_batch(mode) do
+      {:ok, limits} ->
+        Map.merge(Map.fetch!(@protocol_max_batch, mode), limits)
+
+      {:error, reason} ->
+        raise CompileError,
+          file: env.file,
+          line: env.line,
+          description: "Invalid #{inspect(opt)} #{reason}."
+    end
+  end
+
   defmacro __before_compile__(env) do
-    max_reads = Module.get_attribute(env.module, :max_reads_per_batch)
-    max_writes = Module.get_attribute(env.module, :max_writes_per_batch)
+    max_reads = resolve_max_batch!(env, :max_batch_reads, :read)
+    max_writes = resolve_max_batch!(env, :max_batch_writes, :write)
 
-    max_holding_register_reads = max_reads[:holding_registers] || 125
-    max_input_register_reads = max_reads[:input_registers] || 125
-    max_coil_reads = max_reads[:coils] || 2000
-    max_discrete_input_reads = max_reads[:discrete_inputs] || 2000
-
-    max_holding_register_writes = max_writes[:holding_registers] || 123
-    max_coil_writes = max_writes[:coils] || 1968
     mappings = Module.get_attribute(env.module, :modboss_mappings)
 
     duplicate_names =
@@ -437,13 +506,8 @@ defmodule ModBoss.Schema do
     Module.delete_attribute(env.module, :modboss_mapping_support)
 
     quote do
-      def __max_batch__(:read, :holding_register), do: unquote(max_holding_register_reads)
-      def __max_batch__(:read, :input_register), do: unquote(max_input_register_reads)
-      def __max_batch__(:read, :coil), do: unquote(max_coil_reads)
-      def __max_batch__(:read, :discrete_input), do: unquote(max_discrete_input_reads)
-
-      def __max_batch__(:write, :holding_register), do: unquote(max_holding_register_writes)
-      def __max_batch__(:write, :coil), do: unquote(max_coil_writes)
+      def __max_batch__(:read), do: unquote(Macro.escape(max_reads))
+      def __max_batch__(:write), do: unquote(Macro.escape(max_writes))
 
       def __modboss_schema__, do: unquote(mappings_with_normalized_conditions)
 

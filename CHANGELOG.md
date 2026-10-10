@@ -2,6 +2,74 @@
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [unreleased]
+
+### Changed
+
+- Rename the `names` telemetry metadata to `requested_names` on
+  `[:modboss, :read]`/`[:modboss, :write]` events.
+- Rename the `total_attempts` telemetry measurement to `callback_invocations`
+  on `[:modboss, :read]`/`[:modboss, :write]` events.
+- `batches` telemetry now counts the total number of batches the
+  operation's addresses were divided into (i.e. the planned batches)
+  rather than how many were actually attempted before a partial failure.
+- `:max_batch_reads`/`:max_batch_writes` schema options now use singular
+  object type keys (e.g. `max_batch_reads: [holding_register: 100]`)
+  instead of plural ones (e.g. `max_batch_reads: [holding_registers: 100]`).
+- Unrecognized or duplicate keys, and values that aren't positive integers within
+  the Modbus protocol limits, in `:max_batch_reads`/`:max_batch_writes` now raise a
+  `CompileError` instead of being silently ignored.
+- Unrecognized or duplicate options to `use ModBoss.Schema` now raise an `ArgumentError`
+  instead of being silently ignored.
+- Unrecognized or duplicate opts passed to `ModBoss.read/4` and `ModBoss.write/4` now raise
+  an `ArgumentError` (previously a `RuntimeError` for unrecognized opts; duplicates were
+  accepted).
+
+### Added
+
+- Add a `:max_batch` option to `ModBoss.read/4` and `ModBoss.write/4`, which overrides
+  the schema's `:max_batch_reads`/`:max_batch_writes` at runtime. Accepts a single
+  integer (applies to all types) or per-type values; types left out fall back to the
+  schema's limits. Values may exceed the schema's limits but not the Modbus protocol limits.
+- Add the `:if` schema option, allowing mappings to be conditionally supported at runtime
+  based on context. Unsupported mappings are short-circuited; they are neither read nor written
+  during `ModBoss.read/4` or `ModBoss.write/4`, and they are dropped from `ModBoss.encode/3`.
+- Add `unsupported_names` telemetry metadata to `[:modboss, :read, :stop]` /
+  `[:modboss, :write, :stop]` events—which includes names of mappings excluded because
+  their `:if` condition didn't evaluate to `true` for the provided context.
+- Add `gap_ranges` telemetry metadata to `[:modboss, :read, :stop]` events. This is a list of
+  `{type, starting_address, address_count}` tuples describing every gap bridged during the read
+  to reduce the overall number of batches required.
+- Add a `retries` measurement to `[:modboss, :read, :stop]`/`[:modboss, :write, :stop]`
+  events; indicates the number of `read_func`/`write_func` invocations that were not the
+  first attempt for their batch (because the first attempt failed).
+
+### Removed
+
+- Drop `names` telemetry on `:read_callback`/`:write_callback` events. These callbacks are
+  less focused on mappings and more about addresses.
+- Drop the `objects_requested` and `addresses_read` measurements from
+  `[:modboss, :read]`/`[:modboss, :write]` events (per-callback events still report
+  `object_type`, `starting_address`, and `address_count` for each batch actually attempted).
+- Drop the `gap_addresses_read`/`largest_gap` measurements from
+  `[:modboss, :read, :stop]`/`[:modboss, :read_callback, :stop]` events in favor of the new
+  `gap_ranges` on telemetry on `[:modboss, :read, :stop]`.
+
+### Fixed
+
+- Allow modbus address reuse across object types. This was previously unblocked at the Schema
+  level, but retrieved values weren't properly labeled according to their type, so values for a
+  particular address from one object type were incorrectly associated with that address for
+  a different object type.
+- `ModBoss.write/4` now emits `:start` (and `:exception`, or `:start` +
+  `:stop` with an error result) telemetry for failure paths that previously
+  emitted no telemetry at all—an invalid `:if` callback return value, or an
+  encoding failure during write. Planning and encoding now happen inside the
+  telemetry span rather than before it.
+
+See `ModBoss.Telemetry` for the full, current event/measurement/metadata
+contract.
+
 ## [v0.2.0]
 
 ### Added
